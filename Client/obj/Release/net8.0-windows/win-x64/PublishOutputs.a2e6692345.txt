@@ -1,0 +1,3 @@
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\publish\RadioRelay.pdb
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\publish\RadioRelay.Shared.pdb
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\publish\RadioRelay.exe

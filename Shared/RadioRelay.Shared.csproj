@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Pinned to 1.1.7 deliberately: the 2.x line reworked the API around
+         Span<T> and IDisposable. 1.1.7 is the version this codebase is
+         written against and is still what most consuming projects use. -->
+    <PackageReference Include="Concentus" Version="1.1.7" />
+    <!-- Release hygiene: Concentus 1.1.7 targets old NETStandard packages that
+         pull vulnerable System.* versions into NuGet vulnerability scans. On
+         .NET 8 these APIs come from the shared framework at runtime, but pin
+         patched package versions so transitive restore/scanner output is clean. -->
+    <PackageReference Include="System.Net.Http" Version="4.3.4" />
+    <PackageReference Include="System.Security.Cryptography.X509Certificates" Version="4.3.2" />
+  </ItemGroup>
+
+</Project>

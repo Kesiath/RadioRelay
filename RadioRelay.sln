@@ -1,0 +1,40 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RadioRelay.Shared", "Shared\RadioRelay.Shared.csproj", "{1FF9083E-7323-4993-B37E-2AC297EA5B27}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RadioRelay.Server", "Server\RadioRelay.Server.csproj", "{344B90A5-7FAF-4C5F-81D7-43D825C1714F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RadioRelay.Client", "Client\RadioRelay.Client.csproj", "{7FD80ECA-9B3F-49EC-B0FF-3E0F9BE239EF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RadioRelay.Tests", "Tests\RadioRelay.Tests.csproj", "{CC203C6D-1703-4311-8DD9-C11209819AC8}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{1FF9083E-7323-4993-B37E-2AC297EA5B27}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1FF9083E-7323-4993-B37E-2AC297EA5B27}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1FF9083E-7323-4993-B37E-2AC297EA5B27}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1FF9083E-7323-4993-B37E-2AC297EA5B27}.Release|Any CPU.Build.0 = Release|Any CPU
+		{344B90A5-7FAF-4C5F-81D7-43D825C1714F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{344B90A5-7FAF-4C5F-81D7-43D825C1714F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{344B90A5-7FAF-4C5F-81D7-43D825C1714F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{344B90A5-7FAF-4C5F-81D7-43D825C1714F}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7FD80ECA-9B3F-49EC-B0FF-3E0F9BE239EF}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7FD80ECA-9B3F-49EC-B0FF-3E0F9BE239EF}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7FD80ECA-9B3F-49EC-B0FF-3E0F9BE239EF}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7FD80ECA-9B3F-49EC-B0FF-3E0F9BE239EF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CC203C6D-1703-4311-8DD9-C11209819AC8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CC203C6D-1703-4311-8DD9-C11209819AC8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CC203C6D-1703-4311-8DD9-C11209819AC8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CC203C6D-1703-4311-8DD9-C11209819AC8}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

@@ -1,0 +1,24 @@
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\bin\Debug\net8.0\RadioRelay.Shared.deps.json
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\bin\Debug\net8.0\RadioRelay.Shared.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\bin\Debug\net8.0\RadioRelay.Shared.pdb
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.csproj.AssemblyReference.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.AssemblyInfoInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.AssemblyInfo.cs
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.csproj.CoreCompileInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\obj\Debug\net8.0\refint\RadioRelay.Shared.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.pdb
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Shared\obj\Debug\net8.0\ref\RadioRelay.Shared.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\bin\Debug\net8.0\RadioRelay.Shared.deps.json
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\bin\Debug\net8.0\RadioRelay.Shared.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\bin\Debug\net8.0\RadioRelay.Shared.pdb
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.csproj.AssemblyReference.cache
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.AssemblyInfoInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.AssemblyInfo.cs
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.csproj.CoreCompileInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\obj\Debug\net8.0\refint\RadioRelay.Shared.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\obj\Debug\net8.0\RadioRelay.Shared.pdb
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Shared\obj\Debug\net8.0\ref\RadioRelay.Shared.dll

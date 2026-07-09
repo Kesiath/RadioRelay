@@ -1,0 +1,56 @@
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.exe
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.deps.json
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.runtimeconfig.json
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.pdb
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\Concentus.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.Asio.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.Core.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.Midi.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.Wasapi.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.WinForms.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.WinMM.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\SharpDX.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\SharpDX.DirectInput.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.Shared.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.Shared.pdb
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.csproj.AssemblyReference.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.AssemblyInfoInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.AssemblyInfo.cs
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.csproj.CoreCompileInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRel.C3D4B913.Up2Date
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\refint\RadioRelay.dll
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.pdb
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.genruntimeconfig.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\Client\obj\Debug\net8.0-windows\ref\RadioRelay.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.deps.json
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.runtimeconfig.json
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.pdb
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\Concentus.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.Asio.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.Core.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.Midi.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.Wasapi.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.WinForms.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\NAudio.WinMM.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\SharpDX.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\SharpDX.DirectInput.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.Shared.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.Shared.pdb
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.csproj.AssemblyReference.cache
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.AssemblyInfoInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.AssemblyInfo.cs
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.csproj.CoreCompileInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRel.C3D4B913.Up2Date
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\refint\RadioRelay.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.pdb
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\RadioRelay.Client.genruntimeconfig.cache
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\obj\Debug\net8.0-windows\ref\RadioRelay.dll
+C:\Users\4kevi\OneDrive\Desktop\HERMES DOCK\RadioRelay\Client\bin\Debug\net8.0-windows\RadioRelay.exe

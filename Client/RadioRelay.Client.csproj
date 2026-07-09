@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>RadioRelay.Client</RootNamespace>
+    <AssemblyName>RadioRelay</AssemblyName>
+    <Version>1.4.9</Version>
+    <AssemblyVersion>1.4.9.0</AssemblyVersion>
+    <FileVersion>1.4.9.0</FileVersion>
+    <InformationalVersion>1.4.9</InformationalVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <!-- DirectInput (not XInput) deliberately: it covers arbitrary
+         joysticks, HOTAS throttles/sticks and pedals, not just Xbox-style
+         gamepads. SharpDX itself is unmaintained but DirectInput is a
+         frozen Windows API, so the bindings still work fine. -->
+    <PackageReference Include="SharpDX.DirectInput" Version="4.2.0" />
+    <!-- Release hygiene: SharpDX/NAudio bring old NETStandard System.* package
+         references that scanner tools flag even though .NET 8 supplies these
+         assemblies from the shared framework at runtime. Pin patched versions
+         to remove high-severity transitive vulnerability findings. -->
+    <PackageReference Include="System.Net.Http" Version="4.3.4" />
+    <PackageReference Include="System.Text.RegularExpressions" Version="4.3.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Shared\RadioRelay.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Baked directly into the assembly so the published single-file exe
+         doesn't need a separate Assets folder alongside it. -->
+    <EmbeddedResource Include="Assets\Sounds\*.wav" />
+  </ItemGroup>
+
+</Project>
