@@ -6077,11 +6077,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Tests\\RadioRelay.Tests.csproj",
+      "projectUniqueName": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Tests\\RadioRelay.Tests.csproj",
       "projectName": "RadioRelay.Tests",
-      "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Tests\\RadioRelay.Tests.csproj",
+      "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Tests\\RadioRelay.Tests.csproj",
       "packagesPath": "C:\\Users\\4kevi\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Tests\\obj\\",
+      "outputPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Tests\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\4kevi\\AppData\\Roaming\\NuGet\\NuGet.Config",
@@ -6099,14 +6099,14 @@
           "framework": "net8.0-windows7.0",
           "targetAlias": "net8.0-windows",
           "projectReferences": {
-            "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Client\\RadioRelay.Client.csproj": {
-              "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Client\\RadioRelay.Client.csproj"
+            "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Client\\RadioRelay.Client.csproj": {
+              "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Client\\RadioRelay.Client.csproj"
             },
-            "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Server\\RadioRelay.Server.csproj": {
-              "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Server\\RadioRelay.Server.csproj"
+            "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Server\\RadioRelay.Server.csproj": {
+              "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Server\\RadioRelay.Server.csproj"
             },
-            "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Shared\\RadioRelay.Shared.csproj": {
-              "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Shared\\RadioRelay.Shared.csproj"
+            "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Shared\\RadioRelay.Shared.csproj": {
+              "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Shared\\RadioRelay.Shared.csproj"
             }
           }
         }

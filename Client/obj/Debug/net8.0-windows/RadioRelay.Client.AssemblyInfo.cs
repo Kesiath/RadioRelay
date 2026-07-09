@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("RadioRelay")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.4.9.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.4.9")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.4.9+23d485848cdae5102294a50f5b30798f494aceff")]
 [assembly: System.Reflection.AssemblyProductAttribute("RadioRelay")]
 [assembly: System.Reflection.AssemblyTitleAttribute("RadioRelay")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.4.9.0")]

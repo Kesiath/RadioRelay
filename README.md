@@ -399,4 +399,4 @@ Settings import is operationally focused. It is intended to import server/radio 
 
 ## License
 
-No license file is currently included in this repository. Add one before distributing or accepting outside contributions.
+MIT License

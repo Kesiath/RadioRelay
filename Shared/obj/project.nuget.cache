@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "GOe6cEIDL7I=",
+  "dgSpecHash": "qxGos+Qvif4=",
   "success": true,
-  "projectFilePath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Shared\\RadioRelay.Shared.csproj",
+  "projectFilePath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Shared\\RadioRelay.Shared.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\4kevi\\.nuget\\packages\\concentus\\1.1.7\\concentus.1.1.7.nupkg.sha512",
     "C:\\Users\\4kevi\\.nuget\\packages\\microsoft.netcore.platforms\\1.1.1\\microsoft.netcore.platforms.1.1.1.nupkg.sha512",

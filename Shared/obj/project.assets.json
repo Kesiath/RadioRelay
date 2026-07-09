@@ -4511,11 +4511,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Shared\\RadioRelay.Shared.csproj",
+      "projectUniqueName": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Shared\\RadioRelay.Shared.csproj",
       "projectName": "RadioRelay.Shared",
-      "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Shared\\RadioRelay.Shared.csproj",
+      "projectPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Shared\\RadioRelay.Shared.csproj",
       "packagesPath": "C:\\Users\\4kevi\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Shared\\obj\\",
+      "outputPath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Shared\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\4kevi\\AppData\\Roaming\\NuGet\\NuGet.Config",

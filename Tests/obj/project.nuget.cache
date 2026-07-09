@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "a5yCJEmlDJU=",
+  "dgSpecHash": "2shr9GNZMf4=",
   "success": true,
-  "projectFilePath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\HERMES DOCK\\RadioRelay\\Tests\\RadioRelay.Tests.csproj",
+  "projectFilePath": "C:\\Users\\4kevi\\OneDrive\\Desktop\\RadioRelay\\RadioRelay\\Tests\\RadioRelay.Tests.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\4kevi\\.nuget\\packages\\concentus\\1.1.7\\concentus.1.1.7.nupkg.sha512",
     "C:\\Users\\4kevi\\.nuget\\packages\\coverlet.collector\\6.0.0\\coverlet.collector.6.0.0.nupkg.sha512",
