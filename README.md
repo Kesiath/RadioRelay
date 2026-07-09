@@ -12,7 +12,7 @@ The project is written in C# on .NET 8. The client is a Windows Forms applicatio
 - Keyboard, mouse, joystick, HOTAS, and gamepad PTT support
 - Per-radio volume, ear routing, passcode, HUD color, and HUD position
 - Local transmit and receive click sounds
-- Radio-band audio coloration for HF, VHF, UHF, and intercom-style channels
+- Radio-band audio coloration for HF, VHF, UHF channels
 - Optional encrypted radio nets using per-radio passcodes
 - Server password support
 - User presence and per-channel listener counts
