@@ -1,6 +1,6 @@
 namespace RadioRelay.Client.UI
 {
-    /// <summary>Shared dimensions and layout budgets for the responsive main window.</summary>
+    /// <summary>Shared dimensions and layout budgets for the fixed-width main window.</summary>
     public static class MainFormLayoutPolicy
     {
         public const int HorizontalMargin = 18;
@@ -13,7 +13,8 @@ namespace RadioRelay.Client.UI
         public const int SetupStripHeight = 136;
         public const int OperationsStripHeight = 92;
         public const int RadioCardHeight = 176;
-        public const int RadioActivityBadgeWidth = 58;
+        public const int RadioTitleColumnWidth = 136;
+        public const int RadioActivityBadgeWidth = 70;
         public const int RadioActivityBadgeColumnWidth = 70;
         public const int LogHeight = 164;
 
