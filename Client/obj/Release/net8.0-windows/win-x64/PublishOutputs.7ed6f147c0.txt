@@ -1,3 +1,0 @@
-C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\publish\RadioRelay.pdb
-C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\publish\RadioRelay.Shared.pdb
-C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\publish\RadioRelay.exe
