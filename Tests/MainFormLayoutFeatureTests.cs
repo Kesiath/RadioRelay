@@ -7,7 +7,7 @@ public class MainFormLayoutFeatureTests
     [Fact]
     public void Radio_cards_budget_room_for_readable_vertical_controls()
     {
-        Assert.InRange(MainFormLayoutPolicy.RadioCardHeight, 180, 210);
+        Assert.InRange(MainFormLayoutPolicy.RadioCardHeight, 168, 188);
     }
 
     [Fact]
@@ -17,21 +17,23 @@ public class MainFormLayoutFeatureTests
     }
 
     [Fact]
-    public void Minimum_window_width_supports_readable_side_monitor_window()
+    public void Fixed_window_width_supports_the_modern_three_column_device_layout()
     {
-        Assert.InRange(MainFormLayoutPolicy.MinimumWindowWidth, 500, 540);
+        Assert.Equal(820, MainFormLayoutPolicy.FixedWindowWidth);
+        Assert.Equal(760, MainFormLayoutPolicy.MaxContentWidth);
+        Assert.True(MainFormLayoutPolicy.FixedWindowWidth > MainFormLayoutPolicy.MaxContentWidth);
     }
 
     [Fact]
     public void Radio_header_reserves_breathing_room_for_activity_badge()
     {
-        Assert.InRange(MainFormLayoutPolicy.RadioActivityBadgeColumnWidth, 76, 96);
+        Assert.InRange(MainFormLayoutPolicy.RadioActivityBadgeColumnWidth, 64, 80);
     }
 
     [Fact]
     public void Radio_header_breathing_room_sits_to_left_of_right_aligned_activity_badge()
     {
-        Assert.Equal(56, MainFormLayoutPolicy.RadioActivityBadgeWidth);
+        Assert.Equal(58, MainFormLayoutPolicy.RadioActivityBadgeWidth);
         Assert.True(MainFormLayoutPolicy.RadioActivityBadgeColumnWidth > MainFormLayoutPolicy.RadioActivityBadgeWidth);
     }
 

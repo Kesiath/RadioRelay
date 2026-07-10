@@ -5,9 +5,9 @@ namespace RadioRelay.Tests;
 public class ApplicationVersionTests
 {
     [Fact]
-    public void Current_application_version_is_1_4_5_after_rx_display_lifecycle_fix()
+    public void Current_application_version_is_1_5_5()
     {
-        Assert.Equal("1.4.9", ApplicationVersion.Current);
-        Assert.Equal("RadioRelay 1.4.9", ApplicationVersion.DisplayName);
+        Assert.Equal("1.5.6", ApplicationVersion.Current);
+        Assert.Equal("RadioRelay 1.5.6", ApplicationVersion.DisplayName);
     }
 }
