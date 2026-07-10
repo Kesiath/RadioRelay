@@ -14,7 +14,7 @@ using RadioRelay.Shared.Protocol;
 
 namespace RadioRelay.Client
 {
-    public class MainForm : Form
+    public class MainForm : ModernWindowForm
     {
         private class RadioRow
         {
@@ -129,8 +129,6 @@ namespace RadioRelay.Client
         private readonly TextBox _callsignBox = new() { Text = "", MaxLength = 20 };
         private readonly Label _statusLabel = new() { Text = "Disconnected", AutoSize = true, ForeColor = Theme.AccentRed };
         private readonly Label _versionLabel = new() { Text = ApplicationVersion.DisplayName, AutoSize = true, ForeColor = Theme.MutedText };
-        private readonly Label _wordmarkLabel = new() { Text = "●  RadioRelay", AutoSize = true, ForeColor = Theme.Text, Font = Theme.TitleFont };
-
         private readonly NumericTextBox _pttReleaseDelayBox = new() { Minimum = 0, Maximum = 2000, Value = 200, Width = 70 };
 
         private readonly DarkComboBox _inputDeviceBox = new() { DropDownWidth = 360 };
@@ -147,15 +145,25 @@ namespace RadioRelay.Client
 
         private readonly ListBox _logBox = new() { IntegralHeight = false };
         private readonly TableLayoutPanel _page = new() { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+        private readonly ModernScrollHost _scrollHost = new()
+        {
+            Dock = DockStyle.Fill,
+            MinimumContentWidth = MainFormLayoutPolicy.MaxContentWidth,
+            MaximumContentWidth = MainFormLayoutPolicy.MaxContentWidth,
+            ContentPadding = new Padding(
+                MainFormLayoutPolicy.HorizontalMargin,
+                14,
+                MainFormLayoutPolicy.HorizontalMargin,
+                MainFormLayoutPolicy.HorizontalMargin)
+        };
         private readonly RadioActivityTracker _activityTracker = new();
-        private int _lastAutoScrollHeight = -1;
         private bool _layoutInProgress;
 
         private readonly List<RadioRow> _radioRows = new();
 
         // Local aliases keep the layout construction readable while the
         // shared policy remains the single source of truth for testable size
-        // budgets and the fixed main-window geometry.
+        // budgets and the responsive main-window geometry.
         private const int PreferredWindowWidth = MainFormLayoutPolicy.FixedWindowWidth;
         private const int PreferredWindowHeight = MainFormLayoutPolicy.FixedWindowHeight;
         private const int PreferredContentWidth = MainFormLayoutPolicy.MaxContentWidth;
@@ -175,20 +183,23 @@ namespace RadioRelay.Client
             _overlay = new TransmissionOverlayForm(_channels);
 
             Text = ApplicationVersion.DisplayName;
+            TitleBar.Title = "RadioRelay";
+            TitleBar.Subtitle = ApplicationVersion.Current;
+            TitleBar.MaximizeAvailable = false;
             AutoScaleMode = AutoScaleMode.Dpi;
-            FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
-            MinimizeBox = true;
-            SizeGripStyle = SizeGripStyle.Hide;
+            CanResizeHorizontally = false;
             StartPosition = FormStartPosition.CenterScreen;
             Width = PreferredWindowWidth;
             Height = PreferredWindowHeight;
-            AutoScroll = true;
-            BackColor = Theme.Background;
+            MinimumSize = new Size(PreferredWindowWidth, MainFormLayoutPolicy.MinimumWindowHeight);
+            MaximumSize = new Size(PreferredWindowWidth, MainFormLayoutPolicy.MaximumWindowHeight);
+            AutoScroll = false;
             Font = Theme.BodyFont;
             DoubleBuffered = true;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
 
+            ContentHost.Controls.Add(_scrollHost);
             BuildUi();
             WireEvents();
             ApplySavedGlobalSettings();
@@ -1075,13 +1086,11 @@ namespace RadioRelay.Client
         // ---------- UI construction ----------
 
         /// <summary>
-        /// Performs the one layout pass the fixed-size window still needs after
-        /// WinForms applies DPI scaling and creates the native handles. The old
-        /// responsive build did this from RelayoutPage(force: true); removing
-        /// that pass caused the AutoSize page to retain an empty preferred
-        /// layout on some DPI/display configurations.
+        /// Reapplies the page width after WinForms creates or resizes the native
+        /// handles. Keeping this explicit protects the AutoSize table from the
+        /// blank-page regression that affected earlier responsive builds.
         /// </summary>
-        private void FinalizeFixedLayout()
+        private void FinalizeFixedWidthLayout()
         {
             if (_layoutInProgress || IsDisposed || Disposing)
                 return;
@@ -1089,40 +1098,33 @@ namespace RadioRelay.Client
             _layoutInProgress = true;
             try
             {
-                var width = PreferredContentWidth;
-                var left = Math.Max(MainFormLayoutPolicy.HorizontalMargin, (ClientSize.Width - width) / 2);
-
-                SuspendLayout();
+                var children = new Control[_page.Controls.Count];
+                _page.Controls.CopyTo(children, 0);
                 _page.SuspendLayout();
+                foreach (var child in children)
+                    child.SuspendLayout();
                 try
                 {
-                    _page.Width = width;
-                    _page.Left = left;
-                    _wordmarkLabel.Left = left;
+                    _page.Width = PreferredContentWidth;
 
-                    // TableLayoutPanel children were originally assigned their
-                    // final width during the responsive OnShown relayout. Keep
-                    // that initialization, but do it exactly once now that the
-                    // window cannot be resized.
-                    foreach (Control child in _page.Controls)
+                    // Most cards use explicit widths. Apply their final fixed
+                    // geometry once after native handle and DPI creation.
+                    foreach (var child in children)
                     {
-                        if (child.Width != width)
-                            child.Width = width;
+                        if (child.Width != PreferredContentWidth)
+                            child.Width = PreferredContentWidth;
                     }
 
                     _page.Visible = true;
-                    _page.PerformLayout();
                 }
                 finally
                 {
+                    foreach (var child in children)
+                        child.ResumeLayout(performLayout: true);
                     _page.ResumeLayout(performLayout: true);
-                    ResumeLayout(performLayout: true);
                 }
 
                 UpdateAutoScrollMinSize();
-                _page.BringToFront();
-                _wordmarkLabel.BringToFront();
-                _page.Invalidate(true);
             }
             finally
             {
@@ -1138,15 +1140,11 @@ namespace RadioRelay.Client
             _radioRows.Clear();
 
             _page.Width = PreferredContentWidth;
-            _page.Left = Math.Max(MainFormLayoutPolicy.HorizontalMargin, (ClientSize.Width - _page.Width) / 2);
-            _page.Top = 58;
+            _page.Left = 0;
+            _page.Top = 0;
             _page.BackColor = Theme.Background;
             _page.Margin = new Padding(0);
-            Controls.Add(_page);
-
-            _wordmarkLabel.Left = _page.Left;
-            _wordmarkLabel.Top = 18;
-            Controls.Add(_wordmarkLabel);
+            _scrollHost.Content = _page;
 
             StyleField(_serverBox);
             StyleField(_portBox);
@@ -1184,7 +1182,7 @@ namespace RadioRelay.Client
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-            topCard.Controls.Add(CreateSectionHeader("Connection & audio", "server / identity / devices"), 0, 0);
+            topCard.Controls.Add(CreateSectionHeader("Settings", "server / identity / devices"), 0, 0);
             topCard.Controls.Add(CreateServerRow(_serverBox, _portBox, _serverPasswordBox, _connectButton, _statusLabel, _versionLabel), 0, 1);
             topCard.Controls.Add(CreateDeviceRow(_callsignBox, _inputDeviceBox, _outputDeviceBox), 0, 2);
             topCard.Controls.Add(CreateTopSliderPairRow(_inputGainSlider, _inputClickVolSlider, "Input gain", "TX click"), 0, 3);
@@ -1207,12 +1205,7 @@ namespace RadioRelay.Client
             toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             toolbar.Controls.Add(CreateSectionHeader("Controls", "PTT / HUD / profile"), 0, 0);
             toolbar.Controls.Add(CreateToolbarRows(_pttReleaseDelayBox, _controlLockButton, _hudLayoutButton, _exportSettingsButton, _importSettingsButton), 0, 1);
-            AddPageRow(toolbar, 14);
-
-            var radioHeading = CreateSectionHeader("Radios", $"{_channels.Count} configured channels");
-            radioHeading.Width = _page.Width;
-            radioHeading.Height = 32;
-            AddPageRow(radioHeading, 6);
+            AddPageRow(toolbar, 10);
 
             foreach (var ch in _channels)
             {
@@ -1346,19 +1339,14 @@ namespace RadioRelay.Client
 
         private void UpdateAutoScrollMinSize()
         {
-            var requiredHeight = _page.Bottom + MainFormLayoutPolicy.HorizontalMargin;
-            if (requiredHeight == _lastAutoScrollHeight)
-                return;
-
-            _lastAutoScrollHeight = requiredHeight;
-            AutoScrollMinSize = new Size(0, requiredHeight);
+            _scrollHost.RefreshScrollMetrics();
         }
 
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
             ClientDiagnostics.Current?.LogLifecycle(ErrorCodes.ClientFormShown, "main form shown");
-            FinalizeFixedLayout();
+            FinalizeFixedWidthLayout();
         }
 
         private void WireEvents()

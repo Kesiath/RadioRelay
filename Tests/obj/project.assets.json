@@ -1946,7 +1946,7 @@
           "build/net6.0/xunit.runner.visualstudio.props": {}
         }
       },
-      "RadioRelay/1.5.0": {
+      "RadioRelay/1.5.7": {
         "type": "project",
         "framework": ".NETCoreApp,Version=v8.0",
         "dependencies": {
@@ -6044,7 +6044,7 @@
         "xunit.runner.visualstudio.nuspec"
       ]
     },
-    "RadioRelay/1.5.0": {
+    "RadioRelay/1.5.7": {
       "type": "project",
       "path": "../Client/RadioRelay.Client.csproj",
       "msbuildProject": "../Client/RadioRelay.Client.csproj"
@@ -6063,7 +6063,7 @@
   "projectFileDependencyGroups": {
     "net8.0-windows": [
       "Microsoft.NET.Test.Sdk >= 17.8.0",
-      "RadioRelay >= 1.5.0",
+      "RadioRelay >= 1.5.7",
       "RadioRelay.Server >= 1.0.0",
       "RadioRelay.Shared >= 1.0.0",
       "coverlet.collector >= 6.0.0",

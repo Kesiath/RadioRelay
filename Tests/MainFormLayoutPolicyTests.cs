@@ -4,30 +4,14 @@ namespace RadioRelay.Tests;
 
 public class MainFormLayoutPolicyTests
 {
-    [Theory]
-    [InlineData(500, 680)]
-    [InlineData(740, 704)]
-    [InlineData(900, 760)]
-    public void Content_width_scales_between_readable_minimum_and_centered_maximum(int clientWidth, int expected)
-    {
-        Assert.Equal(expected, MainFormLayoutPolicy.ContentWidthFor(clientWidth));
-    }
-
-    [Theory]
-    [InlineData(680, true)]
-    [InlineData(720, false)]
-    [InlineData(760, false)]
-    public void Radio_cards_use_compact_rules_only_below_the_breakpoint(int contentWidth, bool expected)
-    {
-        Assert.Equal(expected, MainFormLayoutPolicy.UseCompactRadioGrid(contentWidth));
-    }
-
     [Fact]
-    public void Main_window_uses_a_fixed_non_compact_geometry()
+    public void Main_window_keeps_a_fixed_width_but_supports_a_smaller_height()
     {
         Assert.Equal(820, MainFormLayoutPolicy.FixedWindowWidth);
         Assert.Equal(860, MainFormLayoutPolicy.FixedWindowHeight);
-        Assert.True(MainFormLayoutPolicy.FixedWindowWidth > MainFormLayoutPolicy.MinimumWindowWidth);
+        Assert.Equal(760, MainFormLayoutPolicy.MaxContentWidth);
+        Assert.InRange(MainFormLayoutPolicy.MinimumWindowHeight, 520, 640);
+        Assert.Equal(short.MaxValue, MainFormLayoutPolicy.MaximumWindowHeight);
     }
 
     [Fact]

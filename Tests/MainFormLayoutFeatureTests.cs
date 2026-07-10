@@ -20,7 +20,8 @@ public class MainFormLayoutFeatureTests
     public void Fixed_window_width_supports_the_modern_three_column_device_layout()
     {
         Assert.Equal(820, MainFormLayoutPolicy.FixedWindowWidth);
-        Assert.True(MainFormLayoutPolicy.FixedWindowWidth > MainFormLayoutPolicy.MinimumWindowWidth);
+        Assert.Equal(760, MainFormLayoutPolicy.MaxContentWidth);
+        Assert.True(MainFormLayoutPolicy.FixedWindowWidth > MainFormLayoutPolicy.MaxContentWidth);
     }
 
     [Fact]

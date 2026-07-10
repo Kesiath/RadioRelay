@@ -11,12 +11,12 @@ namespace RadioRelay.Client
         [STAThread]
         static void Main()
         {
+            Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
             var diagnostics = ClientDiagnostics.CreateDefault();
             ClientDiagnostics.Current = diagnostics;
             diagnostics.LogLifecycle(ErrorCodes.ClientAppStart, "client app starting");
             RegisterExceptionHandlers(diagnostics);
 
-            Application.SetHighDpiMode(HighDpiMode.SystemAware);
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             Application.Run(new MainForm());

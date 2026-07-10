@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("RadioRelay.Shared")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+23d485848cdae5102294a50f5b30798f494aceff")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+9241ac8c85ae6a36d855ccbba38179c8ecd837f0")]
 [assembly: System.Reflection.AssemblyProductAttribute("RadioRelay.Shared")]
 [assembly: System.Reflection.AssemblyTitleAttribute("RadioRelay.Shared")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
