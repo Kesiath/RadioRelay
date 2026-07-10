@@ -80,6 +80,10 @@ _ReSharper*/
 *.[Rr]e[Ss]harper
 *.DotSettings.user
 
+# Local environment config (may contain secrets); keep the example template
+.env
+!.env.example
+
 # Others
 *.tmp
 *.tmp_proj

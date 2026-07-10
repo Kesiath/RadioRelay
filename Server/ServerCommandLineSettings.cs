@@ -2,16 +2,27 @@ namespace RadioRelay.Server
 {
     public sealed class ServerCommandLineSettings
     {
+        /// Environment variable / .env keys the server understands.
+        public const string PortKey = "PORT";
+        public const string PasswordKey = "PASSWORD";
+
         public int Port { get; init; }
         public string Password { get; init; } = "";
         public bool PortFallbackUsed { get; init; }
 
-        public static ServerCommandLineSettings Parse(string[] args, int defaultPort)
+        public static ServerCommandLineSettings Parse(string[] args, int defaultPort, EnvFile? env = null)
         {
+            env ??= EnvFile.Empty;
+
+            // .env values seed the defaults; command-line arguments override them.
             int port = defaultPort;
+            if (env.TryGetInt(PortKey, out var envPort) && envPort is > 0 and <= 65535)
+                port = envPort;
+            string password = env.Get(PasswordKey) ?? "";
+
             int? parsedPort = null;
-            string password = "";
             bool sawPortLikeArgument = false;
+            bool passwordFromArgument = false;
 
             foreach (var raw in args)
             {
@@ -30,9 +41,10 @@ namespace RadioRelay.Server
                     continue;
                 }
 
-                if (password.Length == 0)
+                if (!passwordFromArgument)
                 {
                     password = arg;
+                    passwordFromArgument = true;
                 }
             }
 

@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using RadioRelay.Shared.Diagnostics;
@@ -14,7 +16,8 @@ namespace RadioRelay.Server
             log.LogLifecycle(ErrorCodes.ServerStart, "server process starting");
 
             const int defaultPort = 2302;
-            var settings = ServerCommandLineSettings.Parse(args, defaultPort);
+            var env = LoadEnvFile(log);
+            var settings = ServerCommandLineSettings.Parse(args, defaultPort, env);
             if (settings.PortFallbackUsed)
             {
                 Console.WriteLine(
@@ -39,6 +42,24 @@ namespace RadioRelay.Server
             {
                 log.LogLifecycle(ErrorCodes.ServerStop, "server process stopping");
             }
+        }
+
+        private static EnvFile LoadEnvFile(LocalLog log)
+        {
+            foreach (var path in EnvFileCandidatePaths())
+            {
+                if (!File.Exists(path)) continue;
+                log.LogLifecycle(ErrorCodes.ServerStart, $"loading configuration from {path}");
+                return EnvFile.Load(path);
+            }
+
+            return EnvFile.Empty;
+        }
+
+        private static IEnumerable<string> EnvFileCandidatePaths()
+        {
+            yield return Path.Combine(Directory.GetCurrentDirectory(), ".env");
+            yield return Path.Combine(AppContext.BaseDirectory, ".env");
         }
 
         private static void RegisterExceptionHandlers(LocalLog log)
