@@ -32,9 +32,9 @@ public class CompactFieldLayoutTests
     }
 
     [Fact]
-    public void Fixed_hud_swatch_is_docked_inside_its_field_cell()
+    public void Fixed_hud_swatch_is_centered_inside_its_value_cell()
     {
-        using var swatch = new ModernButton { Text = string.Empty };
+        using var swatch = new ModernButton { Text = string.Empty, Size = new Size(42, 24) };
         using var field = InvokeFieldFactory("CreateFixedField", "HUD", swatch, 50);
 
         field.Size = new Size(50, 44);
@@ -42,9 +42,42 @@ public class CompactFieldLayoutTests
         field.PerformLayout();
 
         Assert.Equal(SizeType.Percent, field.ColumnStyles[0].SizeType);
-        Assert.Equal(DockStyle.Fill, swatch.Dock);
+        Assert.Equal(DockStyle.None, swatch.Dock);
+        Assert.Equal(AnchorStyles.None, swatch.Anchor);
+        Assert.Equal((field.ClientSize.Width - swatch.Width) / 2, swatch.Left);
+        Assert.True(swatch.Top >= 16);
         Assert.True(swatch.Right <= field.DisplayRectangle.Right);
         Assert.True(swatch.Bottom <= field.DisplayRectangle.Bottom);
+    }
+
+    [Fact]
+    public void Toolbar_actions_share_remaining_width_and_align_with_the_input_row()
+    {
+        var delay = new NumericTextBox();
+        var lockButton = new ModernButton { Text = "Lock Controls" };
+        var hudButton = new ModernButton { Text = "Customize HUD" };
+        var exportButton = new ModernButton { Text = "Export Settings" };
+        var importButton = new ModernButton { Text = "Import Settings" };
+        var method = typeof(MainForm).GetMethod("CreateToolbarRows", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
+            null,
+            new object[] { delay, lockButton, hudButton, exportButton, importButton }));
+
+        row.Size = new Size(724, 48);
+        row.CreateControl();
+        row.PerformLayout();
+
+        Assert.Equal(9, row.ColumnCount);
+        foreach (var column in new[] { 2, 4, 6, 8 })
+            Assert.Equal(SizeType.Percent, row.ColumnStyles[column].SizeType);
+        foreach (var button in new[] { lockButton, hudButton, exportButton, importButton })
+        {
+            Assert.Equal(16, button.Margin.Top);
+            Assert.Equal(0, button.Margin.Bottom);
+            Assert.Equal(32, button.Height);
+        }
+        Assert.InRange(Math.Abs(lockButton.Width - importButton.Width), 0, 2);
     }
 
     private static TableLayoutPanel InvokeFieldFactory(string methodName, string label, Control control, int width)
