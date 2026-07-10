@@ -298,7 +298,7 @@ namespace RadioRelay.Client
                 RowCount = 3,
                 BackColor = Color.Transparent,
                 Margin = new Padding(0),
-                Padding = new Padding(0, 0, 10, 0)
+                Padding = Padding.Empty
             };
             body.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
             body.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
@@ -318,7 +318,7 @@ namespace RadioRelay.Client
                 Margin = new Padding(0)
             };
 
-            statusBadge = CreateBadge("IDLE", Theme.FaintText, Theme.Border);
+            statusBadge = CreateBadge("IDLE", Theme.FaintText, Theme.SoftBorder);
             return card;
         }
 
@@ -330,6 +330,7 @@ namespace RadioRelay.Client
                 Width = MainFormLayoutPolicy.RadioActivityBadgeWidth,
                 Height = 24,
                 ForeColor = foreColor,
+                BackColor = borderColor,
                 Font = Theme.SmallMonoFont,
                 Padding = new Padding(6, 2, 6, 2),
                 Margin = new Padding(0)
@@ -562,10 +563,10 @@ namespace RadioRelay.Client
             control.Margin = Padding.Empty;
             if (control is Button)
             {
-                // Preserve compact button dimensions and let TableLayoutPanel
-                // center the control inside the shared value row.
+                // Preserve compact button dimensions and align the HUD swatch
+                // directly beneath its left-aligned caption.
                 control.Dock = DockStyle.None;
-                control.Anchor = AnchorStyles.None;
+                control.Anchor = AnchorStyles.Left;
             }
             else
             {
@@ -624,16 +625,6 @@ namespace RadioRelay.Client
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             panel.RowStyles.Add(new RowStyle(SizeType.Absolute, FieldCaptionHeight));
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
-            return panel;
-        }
-
-        private static TableLayoutPanel CreateActivityField(Control statusBadge)
-        {
-            var panel = CreateFieldContainer(MainFormLayoutPolicy.RadioActivityBadgeColumnWidth);
-            statusBadge.Dock = DockStyle.None;
-            statusBadge.Anchor = AnchorStyles.Right;
-            statusBadge.Margin = Padding.Empty;
-            panel.Controls.Add(statusBadge, 0, 1);
             return panel;
         }
 
@@ -885,15 +876,15 @@ namespace RadioRelay.Client
                 Padding = new Padding(0)
             };
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, MainFormLayoutPolicy.RadioTitleColumnWidth));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 50));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
 
@@ -902,10 +893,10 @@ namespace RadioRelay.Client
                 Text = channel.Name,
                 AutoSize = false,
                 Dock = DockStyle.Fill,
-                ForeColor = Theme.MutedText,
+                ForeColor = Theme.Text,
                 Font = Theme.RadioTitleFont,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(2, 0, 0, 0)
+                Margin = new Padding(0, 0, 0, 8)
             };
 
             userCountLabel.Margin = new Padding(0);
@@ -922,12 +913,19 @@ namespace RadioRelay.Client
             colorButton.Height = 24;
             colorButton.Margin = new Padding(0, 0, 2, 0);
 
+            statusBadge.Dock = DockStyle.None;
+            statusBadge.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            statusBadge.Margin = Padding.Empty;
+            statusBadge.Width = MainFormLayoutPolicy.RadioActivityBadgeColumnWidth;
+            if (statusBadge is StatusBadge badge)
+                badge.FlatRightEdge = true;
+
             row.Controls.Add(title, 0, 0);
             row.Controls.Add(CreateFixedField("Users", userCountLabel, 76), 2, 0);
             row.Controls.Add(CreateCompactField("Key", passcode, 120), 4, 0);
-            row.Controls.Add(CreateFixedField("Mode", encryptState, 76), 6, 0);
+            row.Controls.Add(CreateFixedField("", encryptState, 76), 6, 0);
             row.Controls.Add(CreateFixedField("HUD", colorButton, 50), 8, 0);
-            row.Controls.Add(CreateActivityField(statusBadge), 10, 0);
+            row.Controls.Add(statusBadge, 10, 0);
             return row;
         }
 
@@ -1504,18 +1502,21 @@ namespace RadioRelay.Client
             {
                 row.StatusBadge.Text = "TX";
                 row.StatusBadge.ForeColor = Theme.AccentOrange;
+                row.StatusBadge.BackColor = Theme.AccentOrange;
                 row.Rail.BackColor = Theme.AccentOrange;
             }
             else if (activity == RadioActivityKind.Receiving)
             {
                 row.StatusBadge.Text = "RX";
                 row.StatusBadge.ForeColor = Theme.AccentGreen;
+                row.StatusBadge.BackColor = Theme.AccentGreen;
                 row.Rail.BackColor = Theme.AccentGreen;
             }
             else
             {
                 row.StatusBadge.Text = "IDLE";
                 row.StatusBadge.ForeColor = Theme.FaintText;
+                row.StatusBadge.BackColor = Theme.SoftBorder;
                 row.Rail.BackColor = Theme.SoftBorder;
             }
             row.StatusBadge.Invalidate();

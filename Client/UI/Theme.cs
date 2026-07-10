@@ -30,7 +30,7 @@ namespace RadioRelay.Client.UI
         // System fonts keep the UI predictable on clean Windows installs.
         public static readonly Font TitleFont = new("Segoe UI", 11f, FontStyle.Bold);
         public static readonly Font SectionTitleFont = new("Segoe UI", 10f, FontStyle.Bold);
-        public static readonly Font RadioTitleFont = new("Segoe UI", 12.5f, FontStyle.Bold);
+        public static readonly Font RadioTitleFont = new("Segoe UI", 16.5f, FontStyle.Bold);
         public static readonly Font BodyFont = new("Segoe UI", 9.25f, FontStyle.Regular);
         public static readonly Font ButtonFont = new("Segoe UI", 8.75f, FontStyle.Bold);
         public static readonly Font MonoFont = new("Consolas", 9f, FontStyle.Regular);

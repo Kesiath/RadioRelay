@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Windows.Forms;
 using RadioRelay.Client;
+using RadioRelay.Client.Radio;
 using RadioRelay.Client.UI;
 
 namespace RadioRelay.Tests;
@@ -32,7 +33,7 @@ public class CompactFieldLayoutTests
     }
 
     [Fact]
-    public void Fixed_hud_swatch_is_centered_inside_its_value_cell()
+    public void Fixed_hud_swatch_is_left_aligned_beneath_its_caption()
     {
         using var swatch = new ModernButton { Text = string.Empty, Size = new Size(42, 24) };
         using var field = InvokeFieldFactory("CreateFixedField", "HUD", swatch, 50);
@@ -43,8 +44,8 @@ public class CompactFieldLayoutTests
 
         Assert.Equal(SizeType.Percent, field.ColumnStyles[0].SizeType);
         Assert.Equal(DockStyle.None, swatch.Dock);
-        Assert.Equal(AnchorStyles.None, swatch.Anchor);
-        Assert.Equal((field.ClientSize.Width - swatch.Width) / 2, swatch.Left);
+        Assert.Equal(AnchorStyles.Left, swatch.Anchor);
+        Assert.Equal(0, swatch.Left);
         Assert.True(swatch.Top >= 16);
         Assert.True(swatch.Right <= field.DisplayRectangle.Right);
         Assert.True(swatch.Bottom <= field.DisplayRectangle.Bottom);
@@ -78,6 +79,65 @@ public class CompactFieldLayoutTests
             Assert.Equal(32, button.Height);
         }
         Assert.InRange(Math.Abs(lockButton.Width - importButton.Width), 0, 2);
+    }
+
+    [Fact]
+    public void Radio_header_moves_metadata_left_and_distributes_it_evenly()
+    {
+        var method = typeof(MainForm).GetMethod("CreateRadioHeaderRow", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
+            null,
+            new object[]
+            {
+                new RadioChannel { Name = "RADIO 1" },
+                new Label { Text = "0 users" },
+                new TextBox(),
+                new Label { Text = "OPEN" },
+                new ModernButton { Size = new Size(42, 24) },
+                new StatusBadge { Text = "IDLE", Size = new Size(58, 24), BackColor = Theme.SoftBorder }
+            }));
+
+        row.Size = new Size(710, 52);
+        row.CreateControl();
+        row.PerformLayout();
+
+        var title = Assert.IsType<Label>(row.GetControlFromPosition(0, 0));
+        Assert.Equal(ContentAlignment.MiddleLeft, title.TextAlign);
+        Assert.Equal(new Padding(0, 0, 0, 8), title.Margin);
+        Assert.Equal(44, title.Height);
+        Assert.Equal(SizeType.Absolute, row.ColumnStyles[0].SizeType);
+        Assert.Equal((float)MainFormLayoutPolicy.RadioTitleColumnWidth, row.ColumnStyles[0].Width);
+        foreach (var column in new[] { 2, 4, 6, 8 })
+        {
+            Assert.Equal(SizeType.Percent, row.ColumnStyles[column].SizeType);
+            Assert.Equal(25f, row.ColumnStyles[column].Width);
+        }
+        Assert.Equal(SizeType.Absolute, row.ColumnStyles[10].SizeType);
+        Assert.Equal((float)MainFormLayoutPolicy.RadioActivityBadgeColumnWidth, row.ColumnStyles[10].Width);
+        var usersField = row.GetControlFromPosition(2, 0);
+        Assert.NotNull(usersField);
+        Assert.True(usersField!.Left < 200);
+        var activityBadge = Assert.IsType<StatusBadge>(row.GetControlFromPosition(10, 0));
+        Assert.Equal(MainFormLayoutPolicy.RadioActivityBadgeColumnWidth, activityBadge.Width);
+        Assert.True(activityBadge.FlatRightEdge);
+        Assert.Equal(Theme.SoftBorder, activityBadge.EffectiveBorderColor);
+        Assert.Equal(AnchorStyles.Top | AnchorStyles.Right, activityBadge.Anchor);
+        Assert.Equal(0, activityBadge.Top);
+    }
+
+    [Fact]
+    public void Idle_badge_initializes_with_the_same_outline_color_as_its_rail()
+    {
+        var method = typeof(MainForm).GetMethod("CreateBadge", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var badge = Assert.IsType<StatusBadge>(method!.Invoke(
+            null,
+            new object[] { "IDLE", Theme.FaintText, Theme.SoftBorder }));
+        badge.FlatRightEdge = true;
+
+        Assert.Equal(Theme.SoftBorder, badge.BackColor);
+        Assert.Equal(Theme.SoftBorder, badge.EffectiveBorderColor);
     }
 
     private static TableLayoutPanel InvokeFieldFactory(string methodName, string label, Control control, int width)
