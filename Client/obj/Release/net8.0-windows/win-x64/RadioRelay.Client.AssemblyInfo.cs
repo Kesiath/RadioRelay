@@ -12,11 +12,11 @@ using System.Reflection;
 
 [assembly: System.Reflection.AssemblyCompanyAttribute("RadioRelay")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
-[assembly: System.Reflection.AssemblyFileVersionAttribute("1.4.9.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.4.9")]
+[assembly: System.Reflection.AssemblyFileVersionAttribute("1.5.7.0")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.5.7+fee25814ed4ac2239ccb26d77cea4ebc034f91e1")]
 [assembly: System.Reflection.AssemblyProductAttribute("RadioRelay")]
 [assembly: System.Reflection.AssemblyTitleAttribute("RadioRelay")]
-[assembly: System.Reflection.AssemblyVersionAttribute("1.4.9.0")]
+[assembly: System.Reflection.AssemblyVersionAttribute("1.5.7.0")]
 [assembly: System.Runtime.Versioning.TargetPlatformAttribute("Windows7.0")]
 [assembly: System.Runtime.Versioning.SupportedOSPlatformAttribute("Windows7.0")]
 

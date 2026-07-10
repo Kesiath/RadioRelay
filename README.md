@@ -7,6 +7,7 @@ The project is written in C# on .NET 8. The client is a Windows Forms applicatio
 ## Features
 
 - Multi-radio Windows client
+- Modern responsive dark UI with rounded cards, buttons, status badges, and DPI-safe custom sliders
 - Frequency-based voice routing
 - Independent PTT A / PTT B bindings per radio
 - Keyboard, mouse, joystick, HOTAS, and gamepad PTT support

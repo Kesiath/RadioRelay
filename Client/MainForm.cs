@@ -19,8 +19,8 @@ namespace RadioRelay.Client
         private class RadioRow
         {
             public required RadioChannel Channel;
-            public required NumericUpDown Freq;
-            public required TrackBar Vol;
+            public required NumericTextBox Freq;
+            public required ModernSlider Vol;
             public required DarkComboBox Ear;
             public required TextBox Passcode;
             public required Button PttPrimaryButton;
@@ -37,43 +37,74 @@ namespace RadioRelay.Client
 
         private sealed class DarkInputHost : Panel
         {
+            private bool _childFocused;
+
             public bool ShowBorder { get; set; } = true;
+
+            public bool ChildFocused
+            {
+                get => _childFocused;
+                set
+                {
+                    if (_childFocused == value) return;
+                    _childFocused = value;
+                    Invalidate();
+                }
+            }
 
             public DarkInputHost()
             {
-                SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
-                // The border is painted as a solid fill (whole host filled with
-                // the border color, then everything but a 1px margin re-filled
-                // with the field color) instead of a stroked outline. A 1px
-                // Pen stroke drawn exactly on the last row/column of pixels is
-                // exactly the kind of thing TableLayoutPanel/DPI rounding can
-                // clip off one edge -- which is what was erasing the right-hand
-                // border on the MHz/Key/PTT ms/Port/Pass fields. A fill-based
-                // border always leaves a visible ring on every side since
-                // there's no thin line that can disappear entirely.
-                BackColor = Theme.Border;
+                // This host is the only control responsible for the field
+                // background and border. The native editor/selector inside it
+                // is deliberately borderless and inset from every edge.
+                SetStyle(
+                    ControlStyles.AllPaintingInWmPaint |
+                    ControlStyles.OptimizedDoubleBuffer |
+                    ControlStyles.ResizeRedraw |
+                    ControlStyles.Opaque |
+                    ControlStyles.UserPaint,
+                    true);
+
+                BackColor = Theme.CardBackground;
+                Margin = Padding.Empty;
+                MinimumSize = new Size(1, 26);
+                TabStop = false;
+            }
+
+            protected override void OnPaintBackground(PaintEventArgs e)
+            {
+                e.Graphics.Clear(BackColor);
             }
 
             protected override void OnPaint(PaintEventArgs e)
             {
-                base.OnPaint(e);
-                using var fieldBrush = new SolidBrush(Theme.FieldBackground);
-                if (!ShowBorder)
-                {
-                    e.Graphics.FillRectangle(fieldBrush, ClientRectangle);
+                e.Graphics.Clear(BackColor);
+                e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+
+                // Keep the complete shape inside the host. The field is not
+                // given a Region and does not rely on parent transparency.
+                // This makes the result independent of native TextBox,
+                // native editor, ComboBox, and TableLayoutPanel clipping.
+                var bounds = Rectangle.Inflate(ClientRectangle, -1, -1);
+                if (bounds.Width <= 0 || bounds.Height <= 0)
                     return;
-                }
 
-                var inner = new Rectangle(1, 1, Math.Max(0, Width - 2), Math.Max(0, Height - 2));
-                e.Graphics.FillRectangle(fieldBrush, inner);
-            }
+                using var path = Theme.RoundedRect(bounds, 6);
+                using var fieldBrush = new SolidBrush(Theme.FieldBackground);
+                e.Graphics.FillPath(fieldBrush, path);
 
-            protected override void OnResize(EventArgs eventargs)
-            {
-                base.OnResize(eventargs);
-                Invalidate();
+                if (!ShowBorder)
+                    return;
+
+                using var pen = new Pen(ChildFocused ? Theme.AccentBlue : Theme.Border, ChildFocused ? 1.5f : 1f)
+                {
+                    Alignment = System.Drawing.Drawing2D.PenAlignment.Inset
+                };
+                e.Graphics.DrawPath(pen, path);
             }
         }
+
 
 
         private readonly AppSettings _settings;
@@ -92,52 +123,50 @@ namespace RadioRelay.Client
         private bool _controlLockEnabled;
 
         private readonly TextBox _serverBox = new() { Text = "127.0.0.1" };
-        private readonly NumericUpDown _portBox = new() { Minimum = 1, Maximum = 65535, Value = 5060 };
+        private readonly NumericTextBox _portBox = new() { Minimum = 1, Maximum = 65535, Value = 5060 };
         private readonly TextBox _serverPasswordBox = new() { Text = "", Width = 120, UseSystemPasswordChar = true };
-        private readonly Button _connectButton = new() { Text = "Connect" };
+        private readonly ModernButton _connectButton = new() { Text = "Connect", Emphasized = true, BackColor = Theme.AccentBlue, ForeColor = Color.White };
         private readonly TextBox _callsignBox = new() { Text = "", MaxLength = 20 };
         private readonly Label _statusLabel = new() { Text = "Disconnected", AutoSize = true, ForeColor = Theme.AccentRed };
         private readonly Label _versionLabel = new() { Text = ApplicationVersion.DisplayName, AutoSize = true, ForeColor = Theme.MutedText };
-        private readonly Label _wordmarkLabel = new() { Text = "●  RADIORELAY", AutoSize = true, ForeColor = Theme.MutedText, Font = Theme.TitleFont };
+        private readonly Label _wordmarkLabel = new() { Text = "●  RadioRelay", AutoSize = true, ForeColor = Theme.Text, Font = Theme.TitleFont };
 
-        private readonly NumericUpDown _pttReleaseDelayBox = new() { Minimum = 0, Maximum = 2000, Value = 200, Width = 70 };
+        private readonly NumericTextBox _pttReleaseDelayBox = new() { Minimum = 0, Maximum = 2000, Value = 200, Width = 70 };
 
-        private readonly ComboBox _inputDeviceBox = new() { DropDownStyle = ComboBoxStyle.DropDownList };
-        private readonly ComboBox _outputDeviceBox = new() { DropDownStyle = ComboBoxStyle.DropDownList };
-        private readonly TrackBar _inputGainSlider = new() { Minimum = 0, Maximum = 300, Value = 100 };
-        private readonly TrackBar _inputClickVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
-        private readonly TrackBar _talkOverVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
-        private readonly TrackBar _outputClickVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
+        private readonly DarkComboBox _inputDeviceBox = new() { DropDownWidth = 360 };
+        private readonly DarkComboBox _outputDeviceBox = new() { DropDownWidth = 360 };
+        private readonly ModernSlider _inputGainSlider = new() { Minimum = 0, Maximum = 300, Value = 100 };
+        private readonly ModernSlider _inputClickVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
+        private readonly ModernSlider _talkOverVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
+        private readonly ModernSlider _outputClickVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
 
-        private readonly Button _hudLayoutButton = new() { Text = "Customize HUD" };
-        private readonly Button _controlLockButton = new() { Text = "Lock Controls" };
-        private readonly Button _exportSettingsButton = new() { Text = "Export Settings" };
-        private readonly Button _importSettingsButton = new() { Text = "Import Settings" };
+        private readonly ModernButton _hudLayoutButton = new() { Text = "Customize HUD" };
+        private readonly ModernButton _controlLockButton = new() { Text = "Lock Controls" };
+        private readonly ModernButton _exportSettingsButton = new() { Text = "Export Settings" };
+        private readonly ModernButton _importSettingsButton = new() { Text = "Import Settings" };
 
         private readonly ListBox _logBox = new() { IntegralHeight = false };
         private readonly TableLayoutPanel _page = new() { ColumnCount = 1, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
         private readonly RadioActivityTracker _activityTracker = new();
+        private int _lastAutoScrollHeight = -1;
+        private bool _layoutInProgress;
 
         private readonly List<RadioRow> _radioRows = new();
 
-        // Sizes for the redesigned compact layout. These intentionally live
-        // here rather than in MainFormLayoutPolicy (which still defines
-        // MinimumWindowWidth / ContentWidthFor / HorizontalMargin used
-        // below) since that policy's old RadioCardHeight / ConnectionStripHeight /
-        // SetupStripHeight / OperationsStripHeight / LogHeight / EstimatedMainPageHeight
-        // constants described the previous, taller layout and are no longer
-        // read anywhere in this file.
-        private const int PreferredWindowWidth = 700;
-        private const int PreferredContentWidth = 640;
-        private const int MinContentWidth = 620;
-        private const int CardPadding = 12;
+        // Local aliases keep the layout construction readable while the
+        // shared policy remains the single source of truth for testable size
+        // budgets and the fixed main-window geometry.
+        private const int PreferredWindowWidth = MainFormLayoutPolicy.FixedWindowWidth;
+        private const int PreferredWindowHeight = MainFormLayoutPolicy.FixedWindowHeight;
+        private const int PreferredContentWidth = MainFormLayoutPolicy.MaxContentWidth;
+        private const int CardPadding = 18;
         private const int Gap = 8;
-        private const int SafeRightMargin = 10;
+        private const int SafeRightMargin = 0;
         private const int RailWidth = 4;
-        private const int CompactRadioCardHeight = 150;    // Header key/mode/HUD row + controls + compact PTT row.
-        private const int TopCardHeight = 192;             // Server/device rows + two slider rows for narrower windows.
-        private const int ToolbarCardHeight = 60;          // One snug row: PTT ms + four action buttons.
-        private const int LogCardHeight = 150;             // 16 padding + 18 title + ~116 list.
+        private const int CompactRadioCardHeight = MainFormLayoutPolicy.RadioCardHeight;
+        private const int TopCardHeight = MainFormLayoutPolicy.ConnectionStripHeight;
+        private const int ToolbarCardHeight = MainFormLayoutPolicy.OperationsStripHeight;
+        private const int LogCardHeight = MainFormLayoutPolicy.LogHeight;
 
         public MainForm()
         {
@@ -146,13 +175,19 @@ namespace RadioRelay.Client
             _overlay = new TransmissionOverlayForm(_channels);
 
             Text = ApplicationVersion.DisplayName;
-            Width = PreferredWindowWidth;
-            Height = 860;
-            MinimumSize = new Size(MinContentWidth + (MainFormLayoutPolicy.HorizontalMargin * 2) + 28, 640);
             AutoScaleMode = AutoScaleMode.Dpi;
+            FormBorderStyle = FormBorderStyle.FixedSingle;
+            MaximizeBox = false;
+            MinimizeBox = true;
+            SizeGripStyle = SizeGripStyle.Hide;
+            StartPosition = FormStartPosition.CenterScreen;
+            Width = PreferredWindowWidth;
+            Height = PreferredWindowHeight;
             AutoScroll = true;
             BackColor = Theme.Background;
             Font = Theme.BodyFont;
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
 
             BuildUi();
             WireEvents();
@@ -225,14 +260,15 @@ namespace RadioRelay.Client
 
         private Panel CreateRadioCard(RadioChannel channel, out TableLayoutPanel body, out Label statusBadge, out Panel rail, out Label userCountHeaderLabel)
         {
-            var card = new Panel
+            var card = new ModernPanel
             {
                 Width = _page.Width,
                 Height = CompactRadioCardHeight,
-                BackColor = Theme.CardBackground,
-                Padding = new Padding(CardPadding, 8, CardPadding + SafeRightMargin, 8)
+                FillColor = Theme.CardBackground,
+                BorderColor = Theme.Border,
+                CornerRadius = 12,
+                Padding = new Padding(CardPadding, 10, CardPadding, 10)
             };
-            card.Paint += PaintBorder;
 
             rail = new Panel
             {
@@ -248,15 +284,15 @@ namespace RadioRelay.Client
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
                 RowCount = 3,
-                BackColor = Theme.CardBackground,
+                BackColor = Color.Transparent,
                 Margin = new Padding(0),
-                Padding = new Padding(0)
+                Padding = new Padding(0, 0, 10, 0)
             };
-            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
-            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
-            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
+            body.RowStyles.Add(new RowStyle(SizeType.Absolute, 54));
+            body.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             card.Controls.Add(body);
-            body.BringToFront();
+            rail.BringToFront();
 
             userCountHeaderLabel = new Label
             {
@@ -276,24 +312,16 @@ namespace RadioRelay.Client
 
         private static Label CreateBadge(string text, Color foreColor, Color borderColor)
         {
-            var badge = new Label
+            return new StatusBadge
             {
                 Text = text,
-                AutoSize = false,
                 Width = MainFormLayoutPolicy.RadioActivityBadgeWidth,
-                Height = 20,
+                Height = 24,
                 ForeColor = foreColor,
                 Font = Theme.SmallMonoFont,
                 Padding = new Padding(6, 2, 6, 2),
-                TextAlign = ContentAlignment.MiddleCenter,
                 Margin = new Padding(0)
             };
-            badge.Paint += (_, e) =>
-            {
-                using var pen = new Pen(borderColor);
-                e.Graphics.DrawRectangle(pen, 0, 0, badge.Width - 1, badge.Height - 1);
-            };
-            return badge;
         }
 
         private static Label CreateFieldLabel(string text) => new()
@@ -332,9 +360,12 @@ namespace RadioRelay.Client
         private static void StyleCompactInput(Control c)
         {
             StyleField(c);
-            c.Margin = new Padding(0);
+            c.Margin = Padding.Empty;
             c.Dock = DockStyle.None;
-            c.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
+            // The host performs the one and only bounds calculation. Leaving
+            // left/right anchoring enabled lets WinForms resize the native
+            // child a second time and can push its right edge beyond the host.
+            c.Anchor = AnchorStyles.None;
 
             if (c is TextBox textBox)
             {
@@ -343,18 +374,6 @@ namespace RadioRelay.Client
                 // right edge at this compact size.
                 textBox.BorderStyle = BorderStyle.None;
                 textBox.Multiline = false;
-            }
-            else if (c is NumericUpDown numeric)
-            {
-                // Make NumericUpDown look like a normal typable dark field.
-                // The native spinner strip was the visible white clipped edge
-                // on MHz/PTT MS/Port, so hide it and keep direct typing plus
-                // the existing ValueChanged behavior.
-                numeric.BorderStyle = BorderStyle.None;
-                numeric.TextAlign = HorizontalAlignment.Left;
-                HideNumericSpinner(numeric);
-                numeric.HandleCreated += (_, _) => HideNumericSpinner(numeric);
-                numeric.Resize += (_, _) => HideNumericSpinner(numeric);
             }
             else if (c is ComboBox combo)
             {
@@ -373,29 +392,6 @@ namespace RadioRelay.Client
             }
         }
 
-        private static void HideNumericSpinner(NumericUpDown numeric)
-        {
-            foreach (Control child in numeric.Controls)
-            {
-                var typeName = child.GetType().Name;
-                if (typeName.Contains("Buttons", StringComparison.OrdinalIgnoreCase))
-                {
-                    child.Visible = false;
-                    child.Width = 0;
-                    continue;
-                }
-
-                // Stretch the edit portion over the area the spinner used to
-                // occupy so the field reads as one clean, typable text box.
-                child.Left = 0;
-                child.Top = 0;
-                child.Width = numeric.ClientSize.Width;
-                child.Height = numeric.ClientSize.Height;
-                child.BackColor = Theme.FieldBackground;
-                child.ForeColor = Theme.Text;
-            }
-        }
-
         private static Panel CreateCompactInputHost(Control control)
         {
             StyleCompactInput(control);
@@ -403,62 +399,57 @@ namespace RadioRelay.Client
             var host = new DarkInputHost
             {
                 Dock = DockStyle.Fill,
-                BackColor = Theme.FieldBackground,
-                Margin = new Padding(0),
-                ShowBorder = control is not (ComboBox or DarkComboBox),
-                Padding = control is ComboBox or DarkComboBox ? new Padding(5, 3, 6, 3) : new Padding(6, 4, 6, 3)
+                BackColor = Theme.CardBackground,
+                Margin = Padding.Empty,
+                ShowBorder = true,
+                Padding = control is ComboBox or DarkComboBox
+                    ? new Padding(8, 4, 9, 4)
+                    : new Padding(9, 4, 9, 4)
             };
 
-            void LayoutChild()
-            {
-                LayoutCompactInputChild(host, control);
-            }
-
             host.Controls.Add(control);
-            host.Layout += (_, _) => LayoutChild();
-            host.Resize += (_, _) => LayoutChild();
-            control.Resize += (_, _) => host.Invalidate();
-            LayoutChild();
+            host.Layout += (_, _) => LayoutCompactInputChild(host, control);
+            control.Enter += (_, _) => host.ChildFocused = true;
+            control.Leave += (_, _) => host.ChildFocused = false;
+            LayoutCompactInputChild(host, control);
             return host;
         }
 
         private static void LayoutCompactInputChild(Control host, Control control)
         {
-            int left = host.Padding.Left;
-            int top = host.Padding.Top;
-            int width = Math.Max(1, host.ClientSize.Width - host.Padding.Horizontal);
-            int height = Math.Max(1, host.ClientSize.Height - host.Padding.Vertical);
+            var content = new Rectangle(
+                host.Padding.Left,
+                host.Padding.Top,
+                Math.Max(1, host.ClientSize.Width - host.Padding.Horizontal),
+                Math.Max(1, host.ClientSize.Height - host.Padding.Vertical));
 
-            if (control is ComboBox or DarkComboBox)
+            // Single-line native editors do not honor arbitrary heights. Keep
+            // their preferred height and center them, while custom selectors
+            // can use the complete inset content rectangle.
+            if (control is TextBox or ComboBox)
             {
-                // ComboBox ignores some height requests. Keep it vertically
-                // centered and safely inset so its native painting never
-                // touches the custom host border.
-                int comboHeight = Math.Min(Math.Max(control.Height, 21), height);
-                int comboTop = top + Math.Max(0, (height - comboHeight) / 2);
-                control.SetBounds(left, comboTop, width, comboHeight);
+                int preferredHeight = Math.Min(content.Height, Math.Max(1, control.PreferredSize.Height));
+                int top = content.Top + Math.Max(0, (content.Height - preferredHeight) / 2);
+                control.SetBounds(content.Left, top, content.Width, preferredHeight);
             }
             else
             {
-                control.SetBounds(left, top, width, height);
+                control.SetBounds(content.Left, content.Top, content.Width, content.Height);
             }
 
-            if (control is NumericUpDown numeric)
-                HideNumericSpinner(numeric);
         }
 
-        private static void StyleSlider(TrackBar slider)
+        private static void StyleSlider(ModernSlider slider)
         {
-            slider.BackColor = Theme.CardBackground;
-            slider.TickStyle = TickStyle.None;
-            slider.AutoSize = false;
-            slider.Height = 24;
+            slider.BackColor = Color.Transparent;
+            slider.Height = 28;
             slider.Margin = new Padding(0);
             slider.SmallChange = 1;
             slider.LargeChange = 5;
+            slider.AccentColor = Theme.AccentGreen;
         }
 
-        private static TableLayoutPanel CreateSliderCluster(string label, TrackBar slider, Label? valueLabel = null, int width = 150)
+        private static TableLayoutPanel CreateSliderCluster(string label, ModernSlider slider, Label? valueLabel = null, int width = 150)
         {
             StyleSlider(slider);
             slider.Width = width;
@@ -485,11 +476,20 @@ namespace RadioRelay.Client
         private static void StyleButton(Button b)
         {
             b.FlatStyle = FlatStyle.Flat;
-            b.BackColor = Theme.CardBackground;
-            b.ForeColor = Theme.Text;
-            b.Font = Theme.SmallMonoFont;
+            b.ForeColor = b.ForeColor == SystemColors.ControlText ? Theme.Text : b.ForeColor;
+            b.Font = Theme.ButtonFont;
             b.FlatAppearance.BorderColor = Theme.Border;
-            b.FlatAppearance.BorderSize = 1;
+            b.FlatAppearance.BorderSize = b is ModernButton ? 0 : 1;
+
+            if (b is ModernButton modern)
+            {
+                modern.BorderColor = Theme.Border;
+                if (!modern.Emphasized) modern.BackColor = Theme.RaisedBackground;
+            }
+            else
+            {
+                b.BackColor = Theme.RaisedBackground;
+            }
         }
 
         private static int ButtonWidthFor(string text, int minimum = 90)
@@ -507,24 +507,48 @@ namespace RadioRelay.Client
             return caption;
         }
 
-        private static TableLayoutPanel CreateFixedField(string label, Control control, int width)
+        private static TableLayoutPanel CreateSectionHeader(string title, string subtitle)
         {
-            var panel = new TableLayoutPanel
+            var header = new TableLayoutPanel
             {
-                Width = width,
-                Height = 44,
-                AutoSize = false,
-                ColumnCount = 1,
-                RowCount = 2,
+                Dock = DockStyle.Fill,
+                ColumnCount = 2,
+                RowCount = 1,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 16));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            control.Width = width - 2;
-            control.Height = Math.Max(control.Height, 24);
-            control.Margin = new Padding(0, 0, 2, 0);
-            control.Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top;
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+
+            var titleLabel = new Label
+            {
+                Text = title,
+                Dock = DockStyle.Fill,
+                AutoSize = false,
+                ForeColor = Theme.Text,
+                Font = Theme.SectionTitleFont,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Margin = new Padding(0)
+            };
+            var subtitleLabel = new Label
+            {
+                Text = subtitle.ToUpperInvariant(),
+                AutoSize = true,
+                Anchor = AnchorStyles.Right,
+                ForeColor = Theme.FaintText,
+                Font = Theme.SmallMonoFont,
+                Margin = new Padding(10, 5, 0, 0)
+            };
+            header.Controls.Add(titleLabel, 0, 0);
+            header.Controls.Add(subtitleLabel, 1, 0);
+            return header;
+        }
+
+        private static TableLayoutPanel CreateFixedField(string label, Control control, int width)
+        {
+            var panel = CreateFieldContainer(width);
+            control.Margin = Padding.Empty;
+            control.Dock = DockStyle.Fill;
             if (control is Label valueLabel)
             {
                 valueLabel.AutoSize = false;
@@ -537,18 +561,8 @@ namespace RadioRelay.Client
 
         private static TableLayoutPanel CreateCompactField(string label, Control control, int width)
         {
-            var panel = new TableLayoutPanel
-            {
-                Width = width,
-                Height = 44,
-                AutoSize = false,
-                ColumnCount = 1,
-                RowCount = 2,
-                Margin = new Padding(0),
-                Padding = new Padding(0)
-            };
-            panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 16));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            var panel = CreateFieldContainer(width);
+            control.AccessibleName = label;
             panel.Controls.Add(CreateCaption(label), 0, 0);
             panel.Controls.Add(CreateCompactInputHost(control), 0, 1);
             return panel;
@@ -556,35 +570,51 @@ namespace RadioRelay.Client
 
         private static TableLayoutPanel CreateFillField(string label, Control control)
         {
+            var panel = CreateFieldContainer(1);
+            panel.Dock = DockStyle.Fill;
+            control.AccessibleName = label;
+            panel.Controls.Add(CreateCaption(label), 0, 0);
+            panel.Controls.Add(CreateCompactInputHost(control), 0, 1);
+            return panel;
+        }
+
+        private static TableLayoutPanel CreateFieldContainer(int width)
+        {
             var panel = new TableLayoutPanel
             {
+                Width = width,
+                Height = 44,
                 Dock = DockStyle.Fill,
                 AutoSize = false,
                 ColumnCount = 1,
                 RowCount = 2,
-                Margin = new Padding(0),
-                Padding = new Padding(0)
+                GrowStyle = TableLayoutPanelGrowStyle.FixedSize,
+                Margin = Padding.Empty,
+                Padding = Padding.Empty
             };
+
+            // This explicit 100% column is the important part. When no
+            // ColumnStyle is supplied, TableLayoutPanel treats the column as
+            // AutoSize. A child Panel's default preferred width is 200px, so
+            // the field became wider than its fixed parent and its right edge
+            // was simply clipped. That is why TextBox, DarkComboBox, and HUD
+            // swatch controls all appeared to lose the same right border.
+            panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 16));
-            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            control.Height = Math.Max(control.Height, 24);
-            control.Margin = new Padding(0, 0, 2, 0);
-            control.Dock = DockStyle.Fill;
-            if (control is Label valueLabel)
-            {
-                valueLabel.AutoSize = false;
-                valueLabel.TextAlign = ContentAlignment.MiddleLeft;
-            }
-            panel.Controls.Add(CreateCaption(label), 0, 0);
-            panel.Controls.Add(control, 0, 1);
+            panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
             return panel;
         }
 
-        private static TableLayoutPanel CreateSliderCell(string label, TrackBar slider, Label? valueLabel = null)
+        private static TableLayoutPanel CreateSliderCell(string label, ModernSlider slider, Label? valueLabel = null)
         {
             StyleSlider(slider);
             slider.Margin = new Padding(0);
             slider.Dock = DockStyle.Fill;
+            slider.AccessibleName = label;
+
+            valueLabel ??= new Label();
+            valueLabel.Text = $"{slider.Value}%";
+            slider.ValueChanged += (_, _) => valueLabel.Text = $"{slider.Value}%";
 
             var panel = new TableLayoutPanel
             {
@@ -593,7 +623,8 @@ namespace RadioRelay.Client
                 ColumnCount = 1,
                 RowCount = 2,
                 Margin = new Padding(0),
-                Padding = new Padding(0)
+                Padding = new Padding(0),
+                BackColor = Color.Transparent
             };
             panel.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -601,35 +632,30 @@ namespace RadioRelay.Client
             var header = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = valueLabel == null ? 1 : 2,
+                ColumnCount = 2,
                 RowCount = 1,
                 Margin = new Padding(0),
-                Padding = new Padding(0)
+                Padding = new Padding(0),
+                BackColor = Color.Transparent
             };
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            if (valueLabel != null)
-            {
-                header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 42));
-            }
+            header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 46));
 
             header.Controls.Add(CreateCaption(label), 0, 0);
-            if (valueLabel != null)
-            {
-                valueLabel.AutoSize = false;
-                valueLabel.Dock = DockStyle.Fill;
-                valueLabel.Font = Theme.SmallMonoFont;
-                valueLabel.ForeColor = Theme.MutedText;
-                valueLabel.TextAlign = ContentAlignment.MiddleRight;
-                valueLabel.Margin = new Padding(0);
-                header.Controls.Add(valueLabel, 1, 0);
-            }
+            valueLabel.AutoSize = false;
+            valueLabel.Dock = DockStyle.Fill;
+            valueLabel.Font = Theme.SmallMonoFont;
+            valueLabel.ForeColor = Theme.MutedText;
+            valueLabel.TextAlign = ContentAlignment.MiddleRight;
+            valueLabel.Margin = new Padding(0);
+            header.Controls.Add(valueLabel, 1, 0);
 
             var sliderHost = new Panel
             {
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0),
-                Padding = new Padding(10, 5, 10, 0),
-                BackColor = Theme.CardBackground
+                Padding = new Padding(2, 3, 2, 0),
+                BackColor = Color.Transparent
             };
             sliderHost.Controls.Add(slider);
 
@@ -640,7 +666,7 @@ namespace RadioRelay.Client
 
         private static TableLayoutPanel CreateServerRow(
             TextBox serverBox,
-            NumericUpDown portBox,
+            NumericTextBox portBox,
             TextBox passwordBox,
             Button connectButton,
             Label statusLabel,
@@ -655,19 +681,19 @@ namespace RadioRelay.Client
                 Padding = new Padding(0)
             };
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 112));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 144));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 64));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 118));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-            connectButton.Width = 96;
-            connectButton.Height = 26;
+            connectButton.Width = 110;
+            connectButton.Height = 32;
             connectButton.Margin = new Padding(0, 16, 0, 2);
             connectButton.Dock = DockStyle.Fill;
 
@@ -685,16 +711,16 @@ namespace RadioRelay.Client
             versionLabel.Margin = new Padding(Gap, 16, 0, 2);
             versionLabel.Dock = DockStyle.Fill;
 
-            row.Controls.Add(CreateCompactField("Server", serverBox, 112), 0, 0);
-            row.Controls.Add(CreateCompactField("Port", portBox, 64), 2, 0);
-            row.Controls.Add(CreateCompactField("Pass", passwordBox, 86), 4, 0);
+            row.Controls.Add(CreateCompactField("Server", serverBox, 144), 0, 0);
+            row.Controls.Add(CreateCompactField("Port", portBox, 72), 2, 0);
+            row.Controls.Add(CreateCompactField("Password", passwordBox, 100), 4, 0);
             row.Controls.Add(connectButton, 6, 0);
             row.Controls.Add(statusLabel, 8, 0);
             row.Controls.Add(versionLabel, 9, 0);
             return row;
         }
 
-        private static TableLayoutPanel CreateDeviceRow(TextBox callsignBox, ComboBox inputDeviceBox, ComboBox outputDeviceBox)
+        private static TableLayoutPanel CreateDeviceRow(TextBox callsignBox, DarkComboBox inputDeviceBox, DarkComboBox outputDeviceBox)
         {
             var row = new TableLayoutPanel
             {
@@ -705,23 +731,23 @@ namespace RadioRelay.Client
                 Padding = new Padding(0)
             };
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
 
-            row.Controls.Add(CreateCompactField("Name", callsignBox, 120), 0, 0);
+            row.Controls.Add(CreateCompactField("Callsign", callsignBox, 140), 0, 0);
             row.Controls.Add(CreateFillField("Input", inputDeviceBox), 2, 0);
             row.Controls.Add(CreateFillField("Output", outputDeviceBox), 4, 0);
             return row;
         }
 
         private static TableLayoutPanel CreateTopSliderRow(
-            TrackBar inputGain,
-            TrackBar txClick,
-            TrackBar rxClick,
-            TrackBar talkover)
+            ModernSlider inputGain,
+            ModernSlider txClick,
+            ModernSlider rxClick,
+            ModernSlider talkover)
         {
             var row = new TableLayoutPanel
             {
@@ -746,8 +772,8 @@ namespace RadioRelay.Client
         }
 
         private static TableLayoutPanel CreateTopSliderPairRow(
-            TrackBar leftSlider,
-            TrackBar rightSlider,
+            ModernSlider leftSlider,
+            ModernSlider rightSlider,
             string leftLabel,
             string rightLabel)
         {
@@ -769,22 +795,22 @@ namespace RadioRelay.Client
         }
 
         private static TableLayoutPanel CreateToolbarRows(
-            NumericUpDown pttReleaseDelayBox,
+            NumericTextBox pttReleaseDelayBox,
             Button controlLockButton,
             Button hudLayoutButton,
             Button exportSettingsButton,
             Button importSettingsButton)
         {
-            const int buttonHeight = 26;
-            controlLockButton.Width = 116;
-            hudLayoutButton.Width = 116;
-            exportSettingsButton.Width = 108;
-            importSettingsButton.Width = 108;
+            const int buttonHeight = 32;
+            controlLockButton.Width = 120;
+            hudLayoutButton.Width = 124;
+            exportSettingsButton.Width = 112;
+            importSettingsButton.Width = 112;
             foreach (var button in new[] { controlLockButton, hudLayoutButton, exportSettingsButton, importSettingsButton })
             {
                 button.Height = buttonHeight;
                 button.Dock = DockStyle.Fill;
-                button.Margin = new Padding(0, 16, 0, 2);
+                button.Margin = new Padding(0, 12, 0, 0);
             }
 
             var row = new TableLayoutPanel
@@ -836,13 +862,13 @@ namespace RadioRelay.Client
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 76));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 50));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, MainFormLayoutPolicy.RadioActivityBadgeColumnWidth));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
 
             var title = new Label
             {
@@ -871,11 +897,11 @@ namespace RadioRelay.Client
 
             statusBadge.Dock = DockStyle.None;
             statusBadge.Anchor = AnchorStyles.Right | AnchorStyles.Top;
-            statusBadge.Margin = new Padding(0, 4, 0, 0);
+            statusBadge.Margin = new Padding(0, 10, 0, 0);
 
             row.Controls.Add(title, 0, 0);
             row.Controls.Add(CreateFixedField("Users", userCountLabel, 76), 2, 0);
-            row.Controls.Add(CreateCompactField("Key", passcode, 108), 4, 0);
+            row.Controls.Add(CreateCompactField("Key", passcode, 120), 4, 0);
             row.Controls.Add(CreateFixedField("Mode", encryptState, 76), 6, 0);
             row.Controls.Add(CreateFixedField("HUD", colorButton, 50), 8, 0);
             row.Controls.Add(statusBadge, 10, 0);
@@ -883,8 +909,8 @@ namespace RadioRelay.Client
         }
 
         private static TableLayoutPanel CreateRadioSettingsRow(
-            NumericUpDown freq,
-            TrackBar vol,
+            NumericTextBox freq,
+            ModernSlider vol,
             Label volValue,
             DarkComboBox ear)
         {
@@ -897,19 +923,18 @@ namespace RadioRelay.Client
                 Padding = new Padding(0)
             };
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 108));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 88));
-            // Intentional empty right spacer: keeps EAR from crowding the
-            // status rail/context on the far right while preserving a wide
-            // volume slider in the middle.
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 38));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
+            // Intentional right spacer keeps the output selector clear of
+            // the activity rail at the far-right edge of the card.
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 12));
 
-            row.Controls.Add(CreateCompactField("MHz", freq, 90), 0, 0);
+            row.Controls.Add(CreateCompactField("Frequency (MHz)", freq, 108), 0, 0);
             row.Controls.Add(CreateSliderCell("VOL", vol, volValue), 2, 0);
-            row.Controls.Add(CreateCompactField("Ear", ear, 88), 4, 0);
+            row.Controls.Add(CreateCompactField("Output", ear, 104), 4, 0);
             return row;
         }
 
@@ -958,7 +983,7 @@ namespace RadioRelay.Client
                     {
                         Label => new Padding(0, 5, 8, 0),
                         Button => new Padding(0, 0, 10, 0),
-                        TrackBar => new Padding(0, 0, 14, 0),
+                        ModernSlider => new Padding(0, 0, 14, 0),
                         _ => control.Margin
                     };
                 }
@@ -988,7 +1013,7 @@ namespace RadioRelay.Client
             // The PTT A / PTT B captions are the clickable capture buttons
             // now, which removes the separate Set buttons and keeps each
             // binding row compact without changing the event wiring.
-            const int pttRowHeight = 28;
+            const int pttRowHeight = 34;
             var row = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -997,10 +1022,10 @@ namespace RadioRelay.Client
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 74));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap + 8));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 74));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             row.RowStyles.Add(new RowStyle(SizeType.Absolute, pttRowHeight));
 
@@ -1009,7 +1034,7 @@ namespace RadioRelay.Client
             foreach (var button in new[] { pttPrimaryButton, pttSecondaryButton })
             {
                 button.Dock = DockStyle.Fill;
-                button.Height = 24;
+                button.Height = 30;
                 button.Margin = new Padding(0, 2, 0, 2);
                 button.TextAlign = ContentAlignment.MiddleCenter;
             }
@@ -1049,10 +1074,60 @@ namespace RadioRelay.Client
 
         // ---------- UI construction ----------
 
-        private int CurrentContentWidth()
+        /// <summary>
+        /// Performs the one layout pass the fixed-size window still needs after
+        /// WinForms applies DPI scaling and creates the native handles. The old
+        /// responsive build did this from RelayoutPage(force: true); removing
+        /// that pass caused the AutoSize page to retain an empty preferred
+        /// layout on some DPI/display configurations.
+        /// </summary>
+        private void FinalizeFixedLayout()
         {
-            var available = MainFormLayoutPolicy.ContentWidthFor(ClientSize.Width);
-            return Math.Max(MinContentWidth, Math.Min(PreferredContentWidth, available));
+            if (_layoutInProgress || IsDisposed || Disposing)
+                return;
+
+            _layoutInProgress = true;
+            try
+            {
+                var width = PreferredContentWidth;
+                var left = Math.Max(MainFormLayoutPolicy.HorizontalMargin, (ClientSize.Width - width) / 2);
+
+                SuspendLayout();
+                _page.SuspendLayout();
+                try
+                {
+                    _page.Width = width;
+                    _page.Left = left;
+                    _wordmarkLabel.Left = left;
+
+                    // TableLayoutPanel children were originally assigned their
+                    // final width during the responsive OnShown relayout. Keep
+                    // that initialization, but do it exactly once now that the
+                    // window cannot be resized.
+                    foreach (Control child in _page.Controls)
+                    {
+                        if (child.Width != width)
+                            child.Width = width;
+                    }
+
+                    _page.Visible = true;
+                    _page.PerformLayout();
+                }
+                finally
+                {
+                    _page.ResumeLayout(performLayout: true);
+                    ResumeLayout(performLayout: true);
+                }
+
+                UpdateAutoScrollMinSize();
+                _page.BringToFront();
+                _wordmarkLabel.BringToFront();
+                _page.Invalidate(true);
+            }
+            finally
+            {
+                _layoutInProgress = false;
+            }
         }
 
         private void BuildUi()
@@ -1062,15 +1137,15 @@ namespace RadioRelay.Client
             _page.Controls.Clear();
             _radioRows.Clear();
 
-            _page.Width = CurrentContentWidth();
+            _page.Width = PreferredContentWidth;
             _page.Left = Math.Max(MainFormLayoutPolicy.HorizontalMargin, (ClientSize.Width - _page.Width) / 2);
-            _page.Top = MainFormLayoutPolicy.HorizontalMargin + 26;
+            _page.Top = 58;
             _page.BackColor = Theme.Background;
             _page.Margin = new Padding(0);
             Controls.Add(_page);
 
             _wordmarkLabel.Left = _page.Left;
-            _wordmarkLabel.Top = 7;
+            _wordmarkLabel.Top = 18;
             Controls.Add(_wordmarkLabel);
 
             StyleField(_serverBox);
@@ -1087,54 +1162,65 @@ namespace RadioRelay.Client
             StyleButton(_importSettingsButton);
             StyleField(_pttReleaseDelayBox);
 
-            foreach (var (index, name) in AudioDeviceEnumerator.GetInputDevices()) _inputDeviceBox.Items.Add(new DeviceItem(index, name));
-            foreach (var (index, name) in AudioDeviceEnumerator.GetOutputDevices()) _outputDeviceBox.Items.Add(new DeviceItem(index, name));
+            foreach (var (index, name) in AudioDeviceEnumerator.GetInputDevices())
+                _inputDeviceBox.Items.Add(new DeviceItem(index, name));
+            foreach (var (index, name) in AudioDeviceEnumerator.GetOutputDevices())
+                _outputDeviceBox.Items.Add(new DeviceItem(index, name));
 
-            // ---- Server + identity + audio ----
-            var topCard = new TableLayoutPanel
+            // ---- Connection, identity, devices, and audio levels ----
+            var topCard = new ModernCard
             {
                 Width = _page.Width,
                 Height = TopCardHeight,
-                BackColor = Theme.CardBackground,
-                Padding = new Padding(CardPadding, 8, CardPadding + SafeRightMargin, 8),
+                FillColor = Theme.CardBackground,
+                BorderColor = Theme.Border,
+                CornerRadius = 12,
+                Padding = new Padding(CardPadding, 10, CardPadding, 10),
                 ColumnCount = 1,
-                RowCount = 4,
-                Margin = new Padding(0)
+                RowCount = 5
             };
-            topCard.Paint += PaintBorder;
-            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-            topCard.Controls.Add(CreateServerRow(_serverBox, _portBox, _serverPasswordBox, _connectButton, _statusLabel, _versionLabel), 0, 0);
-            topCard.Controls.Add(CreateDeviceRow(_callsignBox, _inputDeviceBox, _outputDeviceBox), 0, 1);
-            topCard.Controls.Add(CreateTopSliderPairRow(_inputGainSlider, _inputClickVolSlider, "Input gain", "TX click"), 0, 2);
-            topCard.Controls.Add(CreateTopSliderPairRow(_outputClickVolSlider, _talkOverVolSlider, "RX click", "Talkover"), 0, 3);
-            AddPageRow(topCard, 8);
+            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
+            topCard.Controls.Add(CreateSectionHeader("Connection & audio", "server / identity / devices"), 0, 0);
+            topCard.Controls.Add(CreateServerRow(_serverBox, _portBox, _serverPasswordBox, _connectButton, _statusLabel, _versionLabel), 0, 1);
+            topCard.Controls.Add(CreateDeviceRow(_callsignBox, _inputDeviceBox, _outputDeviceBox), 0, 2);
+            topCard.Controls.Add(CreateTopSliderPairRow(_inputGainSlider, _inputClickVolSlider, "Input gain", "TX click"), 0, 3);
+            topCard.Controls.Add(CreateTopSliderPairRow(_outputClickVolSlider, _talkOverVolSlider, "RX click", "Talkover"), 0, 4);
+            AddPageRow(topCard, 10);
 
-            // ---- PTT release delay + HUD/lock/export/import ----
-            var toolbar = new TableLayoutPanel
+            // ---- Global controls ----
+            var toolbar = new ModernCard
             {
                 Width = _page.Width,
                 Height = ToolbarCardHeight,
-                BackColor = Theme.CardBackground,
-                Padding = new Padding(CardPadding, 8, CardPadding + SafeRightMargin, 8),
+                FillColor = Theme.CardBackground,
+                BorderColor = Theme.Border,
+                CornerRadius = 12,
+                Padding = new Padding(CardPadding, 8, CardPadding, 8),
                 ColumnCount = 1,
-                RowCount = 1,
-                Margin = new Padding(0)
+                RowCount = 2
             };
-            toolbar.Paint += PaintBorder;
+            toolbar.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            toolbar.Controls.Add(CreateToolbarRows(_pttReleaseDelayBox, _controlLockButton, _hudLayoutButton, _exportSettingsButton, _importSettingsButton), 0, 0);
-            AddPageRow(toolbar, 8);
+            toolbar.Controls.Add(CreateSectionHeader("Controls", "PTT / HUD / profile"), 0, 0);
+            toolbar.Controls.Add(CreateToolbarRows(_pttReleaseDelayBox, _controlLockButton, _hudLayoutButton, _exportSettingsButton, _importSettingsButton), 0, 1);
+            AddPageRow(toolbar, 14);
+
+            var radioHeading = CreateSectionHeader("Radios", $"{_channels.Count} configured channels");
+            radioHeading.Width = _page.Width;
+            radioHeading.Height = 32;
+            AddPageRow(radioHeading, 6);
 
             foreach (var ch in _channels)
             {
                 var card = CreateRadioCard(ch, out var body, out var statusBadge, out var rail, out var userCountHeaderLabel);
 
-                var freq = new NumericUpDown
+                var freq = new NumericTextBox
                 {
-                    Width = 84,
+                    Width = 108,
                     DecimalPlaces = 3,
                     Increment = 0.025m,
                     Minimum = 2,
@@ -1143,23 +1229,24 @@ namespace RadioRelay.Client
                 };
                 StyleField(freq);
 
-                var vol = new TrackBar
+                var vol = new ModernSlider
                 {
                     Minimum = 0,
                     Maximum = 100,
                     Value = Math.Clamp((int)Math.Round(ch.Volume * 100), 0, 100),
-                    BackColor = Theme.CardBackground
+                    AccentColor = ch.HudColor
                 };
                 var volValue = CreateLabel($"{vol.Value}%", muted: true);
                 volValue.Font = Theme.SmallMonoFont;
                 StyleSlider(vol);
+                vol.AccentColor = ch.HudColor;
 
-                var ear = new DarkComboBox { Width = 82, DropDownWidth = 96 };
+                var ear = new DarkComboBox { Width = 96, DropDownWidth = 112 };
                 StyleField(ear);
                 ear.Items.AddRange(new object[] { RadioEar.Left, RadioEar.Both, RadioEar.Right });
                 ear.SelectedItem = ch.Ear;
 
-                var passcode = new TextBox { Width = 94, Text = ch.Passcode, UseSystemPasswordChar = true };
+                var passcode = new TextBox { Width = 108, Text = ch.Passcode, UseSystemPasswordChar = true };
                 StyleField(passcode);
 
                 var encryptStateVisual = RadioEncryptionVisualState.ForPasscode(ch.Passcode);
@@ -1168,27 +1255,30 @@ namespace RadioRelay.Client
                 encryptState.Font = Theme.SmallMonoFont;
                 var userCountLabel = userCountHeaderLabel;
 
-                var colorButton = new Button
+                var colorButton = new ModernButton
                 {
-                    Text = "",
-                    Width = 40,
-                    Height = 24,
-                    FlatStyle = FlatStyle.Flat,
+                    Text = string.Empty,
+                    Width = 44,
+                    Height = 28,
+                    Emphasized = true,
                     BackColor = ch.HudColor,
-                    ForeColor = Theme.Text
+                    ForeColor = Theme.Text,
+                    CornerRadius = 6,
+                    Margin = Padding.Empty,
+                    AccessibleName = $"{ch.Name} HUD color"
                 };
-                colorButton.FlatAppearance.BorderColor = Theme.Border;
-                colorButton.FlatAppearance.BorderSize = 1;
+                StyleButton(colorButton);
+                colorButton.BackColor = ch.HudColor;
 
                 body.Controls.Add(CreateRadioHeaderRow(ch, userCountHeaderLabel, passcode, encryptState, colorButton, statusBadge), 0, 0);
                 body.Controls.Add(CreateRadioSettingsRow(freq, vol, volValue, ear), 0, 1);
 
-                var pttPrimaryButton = new Button { Text = "PTT A", Width = 68, Height = 24 };
+                var pttPrimaryButton = new ModernButton { Text = "PTT A", Width = 74, Height = 30 };
                 StyleButton(pttPrimaryButton);
                 var pttPrimaryLabel = CreateLabel("Unbound", muted: true);
                 pttPrimaryLabel.AutoSize = false;
 
-                var pttSecondaryButton = new Button { Text = "PTT B", Width = 68, Height = 24 };
+                var pttSecondaryButton = new ModernButton { Text = "PTT B", Width = 74, Height = 30 };
                 StyleButton(pttSecondaryButton);
                 var pttSecondaryLabel = CreateLabel("Unbound", muted: true);
                 pttSecondaryLabel.AutoSize = false;
@@ -1213,63 +1303,62 @@ namespace RadioRelay.Client
                     VolumeValueLabel = volValue,
                     EncryptStateLabel = encryptState
                 });
-                AddPageRow(card, 8);
+                AddPageRow(card, 10);
             }
 
-            // ---- Log ----
-            var logCard = new TableLayoutPanel
+            // ---- Activity log ----
+            var logCard = new ModernCard
             {
                 Width = _page.Width,
                 Height = LogCardHeight,
-                BackColor = Theme.CardBackground,
-                Padding = new Padding(CardPadding, 8, CardPadding + SafeRightMargin, 8),
+                FillColor = Theme.CardBackground,
+                BorderColor = Theme.Border,
+                CornerRadius = 12,
+                Padding = new Padding(CardPadding, 10, CardPadding, 12),
                 ColumnCount = 1,
-                RowCount = 2,
-                Margin = new Padding(0)
+                RowCount = 2
             };
-            logCard.Paint += PaintBorder;
-            logCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 18));
+            logCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
             logCard.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            logCard.Controls.Add(CreateCaption("Log"), 0, 0);
+            logCard.Controls.Add(CreateSectionHeader("Activity log", "connection / radio events"), 0, 0);
 
+            var logHost = new DarkInputHost
+            {
+                Dock = DockStyle.Fill,
+                Margin = new Padding(0, 4, 0, 0),
+                Padding = new Padding(1),
+                ShowBorder = true,
+                BackColor = Theme.CardBackground
+            };
             _logBox.Dock = DockStyle.Fill;
-            _logBox.Margin = new Padding(0, 4, 0, 0);
-            _logBox.BorderStyle = BorderStyle.FixedSingle;
-            StyleField(_logBox);
-            logCard.Controls.Add(_logBox, 0, 1);
+            _logBox.Margin = Padding.Empty;
+            _logBox.BorderStyle = BorderStyle.None;
+            _logBox.BackColor = Theme.FieldBackground;
+            _logBox.ForeColor = Theme.MutedText;
+            _logBox.Font = Theme.MonoFont;
+            logHost.Controls.Add(_logBox);
+            logCard.Controls.Add(logHost, 0, 1);
             AddPageRow(logCard, MainFormLayoutPolicy.HorizontalMargin);
 
-            UpdateAutoScrollMinSize();
-            Resize += (_, _) => RelayoutPage();
-        }
-
-        private void RelayoutPage()
-        {
-            var width = CurrentContentWidth();
-            _page.Width = width;
-            _page.Left = Math.Max(MainFormLayoutPolicy.HorizontalMargin, (ClientSize.Width - width) / 2);
-            _wordmarkLabel.Left = _page.Left;
-            foreach (Control child in _page.Controls) child.Width = width;
             _page.PerformLayout();
             UpdateAutoScrollMinSize();
-            Invalidate(true);
         }
 
         private void UpdateAutoScrollMinSize()
         {
-            _page.PerformLayout();
-            AutoScrollMinSize = new Size(
-                0,
-                _page.Top + _page.PreferredSize.Height + MainFormLayoutPolicy.HorizontalMargin);
+            var requiredHeight = _page.Bottom + MainFormLayoutPolicy.HorizontalMargin;
+            if (requiredHeight == _lastAutoScrollHeight)
+                return;
+
+            _lastAutoScrollHeight = requiredHeight;
+            AutoScrollMinSize = new Size(0, requiredHeight);
         }
 
         protected override void OnShown(EventArgs e)
         {
             base.OnShown(e);
             ClientDiagnostics.Current?.LogLifecycle(ErrorCodes.ClientFormShown, "main form shown");
-            RelayoutPage();
-
-            Refresh();
+            FinalizeFixedLayout();
         }
 
         private void WireEvents()
@@ -1315,6 +1404,7 @@ namespace RadioRelay.Client
                     {
                         localRow.Channel.HudColor = dialog.Color;
                         localRow.ColorButton.BackColor = dialog.Color;
+                        localRow.Vol.AccentColor = dialog.Color;
                     }
                 };
             }
@@ -1490,7 +1580,7 @@ namespace RadioRelay.Client
             }
         }
 
-        private static void SelectDeviceItem(ComboBox box, int deviceIndex)
+        private static void SelectDeviceItem(DarkComboBox box, int deviceIndex)
         {
             foreach (var obj in box.Items)
             {

@@ -135,10 +135,10 @@ namespace RadioRelay.Client.UI
                 ForeColor = Theme.Text,
                 Font = Font,
                 DrawMode = DrawMode.OwnerDrawFixed,
-                IntegralHeight = true,
+                IntegralHeight = false,
                 ItemHeight = Math.Max(18, Font.Height + 4),
                 Width = Math.Max(Width, DropDownWidth),
-                Height = Math.Max(1, Items.Count) * Math.Max(18, Font.Height + 4)
+                Height = Math.Min(10, Math.Max(1, Items.Count)) * Math.Max(18, Font.Height + 4)
             };
             listBox.Items.AddRange(Items.ToArray());
             listBox.SelectedIndex = SelectedIndex;

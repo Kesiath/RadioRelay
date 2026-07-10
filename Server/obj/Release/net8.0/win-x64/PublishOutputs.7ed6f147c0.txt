@@ -1,0 +1,2 @@
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\publish\RadioRelay.Server.pdb
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\publish\RadioRelay.Server.exe

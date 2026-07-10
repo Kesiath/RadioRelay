@@ -1,0 +1,7 @@
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\Tests\bin\Release\net8.0-windows\CoverletSourceRootsMapping_RadioRelay.Tests
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\Tests\obj\Release\net8.0-windows\RadioRelay.Tests.csproj.AssemblyReference.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\Tests\obj\Release\net8.0-windows\RadioRelay.Tests.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\Tests\obj\Release\net8.0-windows\RadioRelay.Tests.AssemblyInfoInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\Tests\obj\Release\net8.0-windows\RadioRelay.Tests.AssemblyInfo.cs
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\Tests\obj\Release\net8.0-windows\RadioRelay.Tests.csproj.CoreCompileInputs.cache
+C:\Users\4kevi\OneDrive\Desktop\RadioRelay\RadioRelay\Tests\obj\Release\net8.0-windows\RadioRelay.Tests.sourcelink.json
