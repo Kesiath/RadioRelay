@@ -37,7 +37,7 @@ namespace RadioRelay.Client.UI
         /// full callsign -- kept separate rather than a single formatted
         /// string so a long callsign gets its own dedicated line/width
         /// instead of running off the edge of a fixed-size chip.
-        private readonly record struct ChipBlock(string Header, IReadOnlyList<string> WhoLines);
+        private readonly record struct ChipBlock(string Header, IReadOnlyList<string> WhoLines, Color WhoColor);
 
         private readonly List<RadioChannel> _channels;
         private readonly Dictionary<RadioChannel, ChipState> _chips = new();
@@ -304,12 +304,12 @@ namespace RadioRelay.Client.UI
             var userCountSuffix = chip != null || _editMode ? $"  •  {PresenceDisplay.FormatCount(chip?.UserCount ?? 0)}" : "";
 
             if (chip?.TxWho != null)
-                blocks.Add(new ChipBlock($"TX ▶  {ch.Name}  {ch.Frequency:0.000} MHz{userCountSuffix}", new[] { chip.TxWho }));
+                blocks.Add(new ChipBlock($"TX ▶  {ch.DisplayName}  {ch.Frequency:0.000} MHz{userCountSuffix}", new[] { chip.TxWho }, Theme.TxUsername));
             if (chip?.RxWhos.Count > 0)
-                blocks.Add(new ChipBlock($"RX ◀  {ch.Name}  {ch.Frequency:0.000} MHz{userCountSuffix}", PackWhoLines(chip.RxWhos.Values)));
+                blocks.Add(new ChipBlock($"RX ◀  {ch.DisplayName}  {ch.Frequency:0.000} MHz{userCountSuffix}", PackWhoLines(chip.RxWhos.Values), Theme.RxUsername));
 
             if (blocks.Count == 0 && _editMode)
-                blocks.Add(new ChipBlock($"TX ▶  {ch.Name}  {ch.Frequency:0.000} MHz{userCountSuffix}", new[] { "Preview" }));
+                blocks.Add(new ChipBlock($"TX ▶  {ch.DisplayName}  {ch.Frequency:0.000} MHz{userCountSuffix}", new[] { "Preview" }, Theme.TxUsername));
 
             return blocks;
         }
@@ -496,8 +496,6 @@ namespace RadioRelay.Client.UI
                 e.Graphics.FillRectangle(accentBrush, bounds.X, bounds.Y + 4, 4, bounds.Height - 8);
 
                 using var headerBrush = new SolidBrush(Theme.Text);
-                using var whoBrush = new SolidBrush(Theme.MutedText);
-
                 int line = 0;
                 foreach (var block in blocks)
                 {
@@ -505,6 +503,7 @@ namespace RadioRelay.Client.UI
                         bounds.X + TextPaddingLeft, bounds.Y + ChipPadding + line * RowHeight);
                     line++;
 
+                    using var whoBrush = new SolidBrush(block.WhoColor);
                     foreach (var whoLine in block.WhoLines)
                     {
                         e.Graphics.DrawString(whoLine, Theme.TitleFont, whoBrush,

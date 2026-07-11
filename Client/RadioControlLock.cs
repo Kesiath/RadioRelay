@@ -2,6 +2,7 @@ namespace RadioRelay.Client
 {
     public readonly record struct RadioControlLock(
         bool IsLocked,
+        bool CanEditName,
         bool CanEditFrequency,
         bool CanEditPasscode,
         bool CanChangePttBinding,
@@ -12,6 +13,7 @@ namespace RadioRelay.Client
 
         public static RadioControlLock For(bool locked) => new(
             IsLocked: locked,
+            CanEditName: !locked,
             CanEditFrequency: !locked,
             CanEditPasscode: !locked,
             CanChangePttBinding: !locked,

@@ -25,6 +25,8 @@ namespace RadioRelay.Client
     public class RadioSettings
     {
         public string Name { get; set; } = "";
+        // Machine-local label; deliberately omitted from operational exports.
+        public string LocalName { get; set; } = "";
         public float Frequency { get; set; }
         public float Volume { get; set; } = 1f;
         public RadioEar Ear { get; set; } = RadioEar.Both;

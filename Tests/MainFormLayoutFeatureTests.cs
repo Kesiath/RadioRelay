@@ -44,4 +44,36 @@ public class MainFormLayoutFeatureTests
         Assert.True(Theme.RadioTitleFont.Size > Theme.TitleFont.Size);
         Assert.InRange(Theme.RadioTitleFont.Size, 16f, 18f);
     }
+
+    [Fact]
+    public void Long_radio_names_scale_down_without_changing_short_names()
+    {
+        var shortNameSize = MainForm.GetRadioNameFontSize("RADIO 1", MainFormLayoutPolicy.RadioTitleColumnWidth);
+        var longNameSize = MainForm.GetRadioNameFontSize("VERY LONG RADIO CHANNEL", MainFormLayoutPolicy.RadioTitleColumnWidth);
+
+        Assert.Equal(Theme.RadioTitleFont.Size, shortNameSize);
+        Assert.InRange(longNameSize, 4f, Theme.RadioTitleFont.Size - 0.1f);
+    }
+
+    [Fact]
+    public void Radio_name_fit_reserves_space_for_textbox_inset_and_caret()
+    {
+        const int width = MainFormLayoutPolicy.RadioTitleColumnWidth;
+        var size = MainForm.GetRadioNameFontSize("thisisaverybigna", width);
+        using var font = new Font(Theme.RadioTitleFont.FontFamily, size, Theme.RadioTitleFont.Style);
+
+        var renderedWidth = TextRenderer.MeasureText(
+            "thisisaverybigna",
+            font,
+            Size.Empty,
+            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+
+        Assert.True(renderedWidth <= width - 14);
+    }
+
+    [Fact]
+    public void Compact_header_text_is_brighter_than_inactive_text()
+    {
+        Assert.True(Theme.HeaderText.GetBrightness() > Theme.FaintText.GetBrightness());
+    }
 }

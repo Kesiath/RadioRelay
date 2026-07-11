@@ -191,6 +191,6 @@ namespace RadioRelay.Client.UI
         }
 
         private static bool PreservesOwnWheelBehavior(Control control) =>
-            control is ComboBox or ListBox or TextBoxBase or ModernSlider or NumericTextBox or ModernScrollBar;
+            control is ComboBox or ListBox or TextBoxBase or NumericTextBox or ModernScrollBar;
     }
 }

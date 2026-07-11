@@ -15,7 +15,8 @@ namespace RadioRelay.Client.UI
         public static readonly Color SoftBorder = Color.FromArgb(31, 39, 48);
         public static readonly Color Text = Color.FromArgb(232, 237, 241);
         public static readonly Color MutedText = Color.FromArgb(148, 160, 171);
-        public static readonly Color FaintText = Color.FromArgb(91, 103, 114);
+        public static readonly Color FaintText = Color.FromArgb(116, 130, 143);
+        public static readonly Color HeaderText = Color.FromArgb(142, 156, 169);
         public static readonly Color DisabledText = Color.FromArgb(82, 92, 101);
         public static readonly Color DisabledFill = Color.FromArgb(26, 31, 36);
         public static readonly Color SliderTrack = Color.FromArgb(45, 55, 65);
@@ -24,6 +25,8 @@ namespace RadioRelay.Client.UI
         public static readonly Color AccentBlue = Color.FromArgb(85, 159, 255);
         public static readonly Color AccentRed = Color.FromArgb(255, 102, 108);
         public static readonly Color AccentOrange = Color.FromArgb(255, 167, 82);
+        public static readonly Color TxUsername = Color.FromArgb(255, 205, 132);
+        public static readonly Color RxUsername = Color.FromArgb(135, 245, 214);
         public static readonly Color TealDim = Color.FromArgb(34, 80, 72);
         public static readonly Color AmberDim = Color.FromArgb(88, 58, 31);
 

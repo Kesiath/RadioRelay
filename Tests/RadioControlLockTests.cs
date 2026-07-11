@@ -23,6 +23,7 @@ public class RadioControlLockTests
     {
         var locked = RadioControlLock.For(locked: true);
 
+        Assert.False(locked.CanEditName);
         Assert.False(locked.CanEditFrequency);
         Assert.False(locked.CanEditPasscode);
         Assert.False(locked.CanChangePttBinding);

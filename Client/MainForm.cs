@@ -19,6 +19,7 @@ namespace RadioRelay.Client
         private class RadioRow
         {
             public required RadioChannel Channel;
+            public required TextBox NameBox;
             public required NumericTextBox Freq;
             public required ModernSlider Vol;
             public required DarkComboBox Ear;
@@ -232,6 +233,7 @@ namespace RadioRelay.Client
             var saved = _settings.Radios.Find(r => r.Name == ch.Name)
                 ?? (ch.Name == "RADIO 3" ? _settings.Radios.Find(r => r.Name == "INTERCOM") : null);
             if (saved == null) return;
+            ch.LocalName = saved.LocalName;
             ch.Frequency = Math.Clamp(saved.Frequency, 2f, 999f);
             ch.Volume = Math.Clamp(saved.Volume, 0f, 1f);
             ch.Ear = saved.Ear;
@@ -253,6 +255,56 @@ namespace RadioRelay.Client
             control.Margin = new Padding(0, 0, 0, bottomMargin);
             _page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             _page.Controls.Add(control, 0, _page.RowCount++);
+        }
+
+        internal static float GetRadioNameFontSize(string text, int availableWidth)
+        {
+            const float minimumSize = 4f;
+            const int textBoxInsetAndCaret = 14;
+            var normalSize = Theme.RadioTitleFont.Size;
+            if (string.IsNullOrEmpty(text) || availableWidth <= 0) return normalSize;
+
+            var safeWidth = Math.Max(1, availableWidth - textBoxInsetAndCaret);
+
+            var measuredWidth = TextRenderer.MeasureText(
+                text,
+                Theme.RadioTitleFont,
+                Size.Empty,
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+            if (measuredWidth <= safeWidth) return normalSize;
+
+            var size = Math.Clamp(normalSize * safeWidth / measuredWidth, minimumSize, normalSize);
+            while (size > minimumSize)
+            {
+                using var candidate = new Font(
+                    Theme.RadioTitleFont.FontFamily,
+                    size,
+                    Theme.RadioTitleFont.Style,
+                    GraphicsUnit.Point);
+                var candidateWidth = TextRenderer.MeasureText(
+                    text,
+                    candidate,
+                    Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+                if (candidateWidth <= safeWidth) return size;
+                size = Math.Max(minimumSize, size - 0.25f);
+            }
+
+            return minimumSize;
+        }
+
+        private static void FitRadioNameFont(TextBox nameBox)
+        {
+            var availableWidth = Math.Max(1, nameBox.ClientSize.Width - 2);
+            var size = GetRadioNameFontSize(nameBox.Text, availableWidth);
+            if (Math.Abs(nameBox.Font.Size - size) < 0.05f) return;
+
+            var previousFont = nameBox.Font;
+            nameBox.Font = Math.Abs(size - Theme.RadioTitleFont.Size) < 0.05f
+                ? Theme.RadioTitleFont
+                : new Font(Theme.RadioTitleFont.FontFamily, size, Theme.RadioTitleFont.Style, GraphicsUnit.Point);
+
+            if (!ReferenceEquals(previousFont, Theme.RadioTitleFont)) previousFont.Dispose();
         }
 
         private Panel CreateStrip(int height)
@@ -341,7 +393,7 @@ namespace RadioRelay.Client
         {
             Text = text.ToUpperInvariant(),
             AutoSize = true,
-            ForeColor = Theme.FaintText,
+            ForeColor = Theme.HeaderText,
             Font = Theme.SmallMonoFont,
             Margin = new Padding(0, 0, 0, 3)
         };
@@ -548,7 +600,7 @@ namespace RadioRelay.Client
                 Text = subtitle.ToUpperInvariant(),
                 AutoSize = true,
                 Anchor = AnchorStyles.Right,
-                ForeColor = Theme.FaintText,
+                ForeColor = Theme.HeaderText,
                 Font = Theme.SmallMonoFont,
                 Margin = new Padding(10, 0, 0, 0)
             };
@@ -860,7 +912,7 @@ namespace RadioRelay.Client
         }
 
         private static TableLayoutPanel CreateRadioHeaderRow(
-            RadioChannel channel,
+            TextBox nameBox,
             Label userCountLabel,
             TextBox passcode,
             Label encryptState,
@@ -888,17 +940,6 @@ namespace RadioRelay.Client
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
 
-            var title = new Label
-            {
-                Text = channel.Name,
-                AutoSize = false,
-                Dock = DockStyle.Fill,
-                ForeColor = Theme.Text,
-                Font = Theme.RadioTitleFont,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(0, 0, 0, 8)
-            };
-
             userCountLabel.Margin = new Padding(0);
             userCountLabel.TextAlign = ContentAlignment.MiddleLeft;
 
@@ -920,7 +961,7 @@ namespace RadioRelay.Client
             if (statusBadge is StatusBadge badge)
                 badge.FlatRightEdge = true;
 
-            row.Controls.Add(title, 0, 0);
+            row.Controls.Add(nameBox, 0, 0);
             row.Controls.Add(CreateFixedField("Users", userCountLabel, 76), 2, 0);
             row.Controls.Add(CreateCompactField("Key", passcode, 120), 4, 0);
             row.Controls.Add(CreateFixedField("", encryptState, 76), 6, 0);
@@ -1221,6 +1262,24 @@ namespace RadioRelay.Client
             {
                 var card = CreateRadioCard(ch, out var body, out var statusBadge, out var rail, out var userCountHeaderLabel);
 
+                var nameBox = new TextBox
+                {
+                    Text = ch.DisplayName,
+                    BorderStyle = BorderStyle.None,
+                    BackColor = Theme.CardBackground,
+                    ForeColor = Theme.Text,
+                    Font = Theme.RadioTitleFont,
+                    MaxLength = 24,
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(0, 10, 0, 8),
+                    AccessibleName = $"{ch.Name} name"
+                };
+                nameBox.SizeChanged += (_, _) => FitRadioNameFont(nameBox);
+                nameBox.Disposed += (_, _) =>
+                {
+                    if (!ReferenceEquals(nameBox.Font, Theme.RadioTitleFont)) nameBox.Font.Dispose();
+                };
+
                 var freq = new NumericTextBox
                 {
                     Width = 108,
@@ -1273,7 +1332,8 @@ namespace RadioRelay.Client
                 StyleButton(colorButton);
                 colorButton.BackColor = ch.HudColor;
 
-                body.Controls.Add(CreateRadioHeaderRow(ch, userCountHeaderLabel, passcode, encryptState, colorButton, statusBadge), 0, 0);
+                body.Controls.Add(CreateRadioHeaderRow(nameBox, userCountHeaderLabel, passcode, encryptState, colorButton, statusBadge), 0, 0);
+                FitRadioNameFont(nameBox);
                 body.Controls.Add(CreateRadioSettingsRow(freq, vol, volValue, ear), 0, 1);
 
                 var pttPrimaryButton = new ModernButton { Text = "PTT A", Width = 74, Height = 30 };
@@ -1291,6 +1351,7 @@ namespace RadioRelay.Client
                 _radioRows.Add(new RadioRow
                 {
                     Channel = ch,
+                    NameBox = nameBox,
                     Freq = freq,
                     Vol = vol,
                     Ear = ear,
@@ -1364,6 +1425,13 @@ namespace RadioRelay.Client
             foreach (var row in _radioRows)
             {
                 var localRow = row;
+
+                localRow.NameBox.TextChanged += (_, _) =>
+                {
+                    localRow.Channel.LocalName = localRow.NameBox.Text;
+                    FitRadioNameFont(localRow.NameBox);
+                    _overlay.Invalidate();
+                };
 
                 localRow.Freq.ValueChanged += (_, _) =>
                 {
@@ -1574,6 +1642,7 @@ namespace RadioRelay.Client
 
             foreach (var row in _radioRows)
             {
+                row.NameBox.Enabled = state.CanEditName;
                 row.Freq.Enabled = state.CanEditFrequency;
                 row.Passcode.Enabled = state.CanEditPasscode;
                 row.PttPrimaryButton.Enabled = state.CanChangePttBinding;
@@ -1655,6 +1724,7 @@ namespace RadioRelay.Client
                 _settings.Radios.Add(new RadioSettings
                 {
                     Name = row.Channel.Name,
+                    LocalName = row.Channel.LocalName,
                     Frequency = row.Channel.Frequency,
                     Volume = row.Channel.Volume,
                     Ear = row.Channel.Ear,
@@ -1731,6 +1801,7 @@ namespace RadioRelay.Client
         {
             foreach (var row in _radioRows)
             {
+                row.NameBox.Text = row.Channel.DisplayName;
                 row.Freq.Value = (decimal)Math.Clamp(row.Channel.Frequency, (float)row.Freq.Minimum, (float)row.Freq.Maximum);
                 row.Vol.Value = Math.Clamp((int)Math.Round(row.Channel.Volume * 100), row.Vol.Minimum, row.Vol.Maximum);
                 row.VolumeValueLabel.Text = $"{row.Vol.Value}%";

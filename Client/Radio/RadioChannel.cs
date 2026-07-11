@@ -14,6 +14,8 @@ namespace RadioRelay.Client.Radio
     public class RadioChannel
     {
         public string Name { get; set; } = "RADIO";
+        public string LocalName { get; set; } = "";
+        public string DisplayName => string.IsNullOrWhiteSpace(LocalName) ? Name : LocalName.Trim();
         public float Frequency { get; set; } = 251.000f;
         public float Volume { get; set; } = 1.0f; // 0..1 -- 0 is effectively "not listening"
         public bool IsIntercom { get; set; } = false;

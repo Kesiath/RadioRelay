@@ -31,6 +31,7 @@ public class AppSettingsImportExportTests
                 new()
                 {
                     Name = "RADIO 1",
+                    LocalName = "Guard",
                     Frequency = 251.000f,
                     Volume = 0.75f,
                     Ear = RadioEar.Left,
@@ -75,6 +76,7 @@ public class AppSettingsImportExportTests
         Assert.False(radio.TryGetProperty("HudColorArgb", out _));
         Assert.False(radio.TryGetProperty("HudX", out _));
         Assert.False(radio.TryGetProperty("HudY", out _));
+        Assert.False(radio.TryGetProperty("LocalName", out _));
     }
 
     [Fact]
@@ -133,6 +135,7 @@ public class AppSettingsImportExportTests
                 new()
                 {
                     Name = "RADIO 1",
+                    LocalName = "Local Guard",
                     Frequency = 240.000f,
                     Volume = 0.45f,
                     Ear = RadioEar.Left,
@@ -174,6 +177,7 @@ public class AppSettingsImportExportTests
 
         var radio = Assert.Single(local.Radios);
         Assert.Equal("RADIO 1", radio.Name);
+        Assert.Equal("Local Guard", radio.LocalName);
         Assert.Equal(251.000f, radio.Frequency);
         Assert.Equal("new-red", radio.Passcode);
         Assert.Equal(0.45f, radio.Volume);
