@@ -17,6 +17,9 @@ namespace RadioRelay.Client.UI
         private readonly CaptionButton _closeButton;
         private string _title = "RadioRelay";
         private string _subtitle = string.Empty;
+        private string _updateText = string.Empty;
+        private Rectangle _updateBounds = Rectangle.Empty;
+        private bool _updateHovered;
         private bool _active = true;
         private bool _maximizeAvailable = true;
 
@@ -59,6 +62,7 @@ namespace RadioRelay.Client.UI
         public event EventHandler? MinimizeRequested;
         public event EventHandler? MaximizeRestoreRequested;
         public event EventHandler? CloseRequested;
+        public event EventHandler? UpdateRequested;
 
         public string Title
         {
@@ -80,6 +84,19 @@ namespace RadioRelay.Client.UI
                 value ??= string.Empty;
                 if (_subtitle == value) return;
                 _subtitle = value;
+                Invalidate();
+            }
+        }
+
+        public string UpdateText
+        {
+            get => _updateText;
+            set
+            {
+                value ??= string.Empty;
+                if (_updateText == value) return;
+                _updateText = value;
+                _updateBounds = Rectangle.Empty;
                 Invalidate();
             }
         }
@@ -114,7 +131,8 @@ namespace RadioRelay.Client.UI
         public bool IsInteractiveAt(Point clientPoint) =>
             _minimizeButton.Bounds.Contains(clientPoint) ||
             (_maximizeAvailable && _maximizeButton.Bounds.Contains(clientPoint)) ||
-            _closeButton.Bounds.Contains(clientPoint);
+            _closeButton.Bounds.Contains(clientPoint) ||
+            _updateBounds.Contains(clientPoint);
 
         protected override void OnLayout(LayoutEventArgs levent)
         {
@@ -164,6 +182,37 @@ namespace RadioRelay.Client.UI
                     subtitleBounds,
                     _active ? Theme.MutedText : Theme.FaintText,
                     TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+
+                _updateBounds = Rectangle.Empty;
+                if (!string.IsNullOrWhiteSpace(_updateText))
+                {
+                    var subtitleWidth = TextRenderer.MeasureText(_subtitle, Theme.BodyFont, Size.Empty, TextFormatFlags.NoPadding).Width;
+                    var updateWidth = TextRenderer.MeasureText(_updateText, Theme.SmallMonoFont, Size.Empty, TextFormatFlags.NoPadding).Width + 18;
+                    var updateLeft = 50 + titleWidth + subtitleWidth;
+                    var availableWidth = _minimizeButton.Left - updateLeft - 10;
+                    if (availableWidth > 24)
+                    {
+                        _updateBounds = new Rectangle(
+                            updateLeft,
+                            (Height - 24) / 2,
+                            Math.Min(updateWidth, availableWidth),
+                            24);
+                        using var updatePath = Theme.RoundedRect(_updateBounds, 6);
+                        using var updateFill = new SolidBrush(_updateHovered ? Theme.AccentBlue : Theme.Blend(Theme.RaisedBackground, Theme.AccentBlue, 0.22f));
+                        e.Graphics.FillPath(updateFill, updatePath);
+                        TextRenderer.DrawText(
+                            e.Graphics,
+                            _updateText,
+                            Theme.SmallMonoFont,
+                            _updateBounds,
+                            _active ? Theme.Text : Theme.MutedText,
+                            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis);
+                    }
+                }
+            }
+            else
+            {
+                _updateBounds = Rectangle.Empty;
             }
 
             using var divider = new Pen(Theme.SoftBorder);
@@ -173,6 +222,11 @@ namespace RadioRelay.Client.UI
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
+            if (e.Button == MouseButtons.Left && _updateBounds.Contains(e.Location))
+            {
+                UpdateRequested?.Invoke(this, EventArgs.Empty);
+                return;
+            }
             var form = FindForm();
             if (form == null || IsInteractiveAt(e.Location)) return;
 
@@ -187,6 +241,25 @@ namespace RadioRelay.Client.UI
             {
                 _ = SendMessage(form.Handle, WM_NCRBUTTONUP, (IntPtr)HTCAPTION, packedPoint);
             }
+        }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            base.OnMouseMove(e);
+            var hovered = _updateBounds.Contains(e.Location);
+            Cursor = hovered ? Cursors.Hand : Cursors.Default;
+            if (_updateHovered == hovered) return;
+            _updateHovered = hovered;
+            Invalidate(_updateBounds);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            base.OnMouseLeave(e);
+            Cursor = Cursors.Default;
+            if (!_updateHovered) return;
+            _updateHovered = false;
+            Invalidate(_updateBounds);
         }
 
         private static IntPtr PackScreenPoint(Point point)

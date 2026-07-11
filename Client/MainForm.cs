@@ -122,6 +122,9 @@ namespace RadioRelay.Client
         private bool _hudEditMode;
         private bool _connectionEstablished;
         private bool _controlLockEnabled;
+        private readonly CancellationTokenSource _updateCheckCancellation = new();
+        private string? _availableUpdateUrl;
+        private bool _updateCheckStarted;
 
         private readonly TextBox _serverBox = new() { Text = "127.0.0.1" };
         private readonly NumericTextBox _portBox = new() { Minimum = 1, Maximum = 65535, Value = 5060 };
@@ -1418,10 +1421,51 @@ namespace RadioRelay.Client
             base.OnShown(e);
             ClientDiagnostics.Current?.LogLifecycle(ErrorCodes.ClientFormShown, "main form shown");
             FinalizeFixedWidthLayout();
+            if (!_updateCheckStarted)
+            {
+                _updateCheckStarted = true;
+                _ = CheckForUpdatesAsync();
+            }
+        }
+
+        private async System.Threading.Tasks.Task CheckForUpdatesAsync()
+        {
+            try
+            {
+                var update = await GitHubUpdateChecker.CheckAsync(
+                    ApplicationVersion.Current,
+                    _updateCheckCancellation.Token);
+                if (update == null || IsDisposed || Disposing) return;
+
+                _availableUpdateUrl = update.ReleaseUrl;
+                TitleBar.UpdateText = $"UPDATE {update.Version}";
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception) { }
+        }
+
+        private void OpenAvailableUpdate()
+        {
+            if (string.IsNullOrWhiteSpace(_availableUpdateUrl)) return;
+
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = _availableUpdateUrl,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                LogSafe($"Unable to open update page: {ex.Message}");
+            }
         }
 
         private void WireEvents()
         {
+            TitleBar.UpdateRequested += (_, _) => OpenAvailableUpdate();
+
             foreach (var row in _radioRows)
             {
                 var localRow = row;
@@ -2026,6 +2070,8 @@ namespace RadioRelay.Client
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             ClientDiagnostics.Current?.LogLifecycle(ErrorCodes.ClientFormClosed, "main form closed");
+            _updateCheckCancellation.Cancel();
+            _updateCheckCancellation.Dispose();
             SaveCurrentSettings();
 
             foreach (var timer in _pttReleaseTimers.Values) timer.Dispose();

@@ -1,3 +1,4 @@
+using RadioRelay.Client;
 using RadioRelay.Client.UI;
 
 namespace RadioRelay.Tests;
