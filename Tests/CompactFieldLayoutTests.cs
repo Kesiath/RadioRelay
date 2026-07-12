@@ -82,6 +82,31 @@ public class CompactFieldLayoutTests
     }
 
     [Fact]
+    public void Server_user_total_is_inline_immediately_after_connect_button()
+    {
+        using var server = new TextBox();
+        using var port = new NumericTextBox();
+        using var password = new TextBox();
+        using var connect = new ModernButton { Text = "Connect" };
+        using var users = new Label { Text = "12 users" };
+        using var status = new Label { Text = "Connected" };
+        using var version = new Label { Text = "RadioRelay 1.6.0" };
+        var method = typeof(MainForm).GetMethod("CreateServerRow", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
+            null,
+            new object[] { server, port, password, connect, users, status, version }));
+
+        row.Size = new Size(724, 48);
+        row.CreateControl();
+        row.PerformLayout();
+
+        Assert.True(users.Left > connect.Right);
+        Assert.Equal(connect.Top, users.Top);
+        Assert.Equal(connect.Height, users.Height);
+    }
+
+    [Fact]
     public void Radio_header_moves_metadata_left_and_distributes_it_evenly()
     {
         var method = typeof(MainForm).GetMethod("CreateRadioHeaderRow", BindingFlags.Static | BindingFlags.NonPublic);
