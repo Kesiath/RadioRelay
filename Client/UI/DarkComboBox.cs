@@ -42,6 +42,10 @@ namespace RadioRelay.Client.UI
 
         public int DropDownWidth { get; set; } = 96;
 
+        public int MaximumDropDownWidth { get; set; } = 1200;
+
+        public bool AutoSizeDropDownToItems { get; set; } = true;
+
         public int SelectedIndex
         {
             get => _selectedIndex;
@@ -128,6 +132,7 @@ namespace RadioRelay.Client.UI
 
             CloseDropDown(_dropDown);
 
+            var workingArea = Screen.FromControl(this).WorkingArea;
             var listBox = new ListBox
             {
                 BorderStyle = BorderStyle.None,
@@ -137,7 +142,7 @@ namespace RadioRelay.Client.UI
                 DrawMode = DrawMode.OwnerDrawFixed,
                 IntegralHeight = false,
                 ItemHeight = Math.Max(18, Font.Height + 4),
-                Width = Math.Max(Width, DropDownWidth),
+                Width = CalculateDropDownWidth(workingArea.Width),
                 Height = Math.Min(10, Math.Max(1, Items.Count)) * Math.Max(18, Font.Height + 4)
             };
             listBox.Items.AddRange(Items.ToArray());
@@ -193,6 +198,30 @@ namespace RadioRelay.Client.UI
             };
             dropDown.Show(this, new Point(0, Height));
             listBox.Focus();
+        }
+
+        internal int CalculateDropDownWidth(int availableScreenWidth)
+        {
+            var minimumWidth = Math.Max(Width, DropDownWidth);
+            if (!AutoSizeDropDownToItems || Items.Count == 0) return minimumWidth;
+
+            var widestItem = 0;
+            foreach (var item in Items)
+            {
+                widestItem = Math.Max(
+                    widestItem,
+                    TextRenderer.MeasureText(
+                        item?.ToString() ?? string.Empty,
+                        Font,
+                        Size.Empty,
+                        TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width);
+            }
+
+            // Text inset on both sides plus room for the vertical scrollbar.
+            var desiredWidth = widestItem + 20 + SystemInformation.VerticalScrollBarWidth;
+            var screenCap = Math.Max(Width, availableScreenWidth - 32);
+            var maximumWidth = Math.Max(Width, Math.Min(MaximumDropDownWidth, screenCap));
+            return Math.Clamp(Math.Max(minimumWidth, desiredWidth), Width, maximumWidth);
         }
 
         private void CloseDropDown(ToolStripDropDown? dropDown)
