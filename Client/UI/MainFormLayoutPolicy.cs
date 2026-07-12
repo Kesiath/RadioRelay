@@ -21,5 +21,8 @@ namespace RadioRelay.Client.UI
         public static int EstimatedMainPageHeight(int radioCount) =>
             58 + ConnectionStripHeight + OperationsStripHeight + 46 +
             Math.Max(0, radioCount) * (RadioCardHeight + 10) + LogHeight + HorizontalMargin * 2;
+
+        public static int ScaleLogical(int logicalPixels, int dpi) =>
+            Math.Max(1, (int)Math.Round(logicalPixels * Math.Max(96, dpi) / 96d));
     }
 }

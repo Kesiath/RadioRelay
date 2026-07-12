@@ -163,6 +163,7 @@ namespace RadioRelay.Client
         };
         private readonly RadioActivityTracker _activityTracker = new();
         private bool _layoutInProgress;
+        private bool _initialDpiSizeApplied;
 
         private readonly List<RadioRow> _radioRows = new();
 
@@ -1171,14 +1172,15 @@ namespace RadioRelay.Client
                     child.SuspendLayout();
                 try
                 {
-                    _page.Width = PreferredContentWidth;
+                    var scaledContentWidth = MainFormLayoutPolicy.ScaleLogical(PreferredContentWidth, DeviceDpi);
+                    _page.Width = scaledContentWidth;
 
                     // Most cards use explicit widths. Apply their final fixed
                     // geometry once after native handle and DPI creation.
                     foreach (var child in children)
                     {
-                        if (child.Width != PreferredContentWidth)
-                            child.Width = PreferredContentWidth;
+                        if (child.Width != scaledContentWidth)
+                            child.Width = scaledContentWidth;
                     }
 
                     _page.Visible = true;
@@ -1436,6 +1438,37 @@ namespace RadioRelay.Client
             {
                 _updateCheckStarted = true;
                 _ = CheckForUpdatesAsync();
+            }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            ApplyDpiWindowConstraints();
+        }
+
+        protected override void OnDpiChanged(DpiChangedEventArgs e)
+        {
+            base.OnDpiChanged(e);
+            ApplyDpiWindowConstraints();
+            FinalizeFixedWidthLayout();
+        }
+
+        private void ApplyDpiWindowConstraints()
+        {
+            var scaledWidth = MainFormLayoutPolicy.ScaleLogical(PreferredWindowWidth, DeviceDpi);
+            var scaledMinimumHeight = MainFormLayoutPolicy.ScaleLogical(MainFormLayoutPolicy.MinimumWindowHeight, DeviceDpi);
+            MinimumSize = new Size(scaledWidth, scaledMinimumHeight);
+            MaximumSize = new Size(scaledWidth, MainFormLayoutPolicy.MaximumWindowHeight);
+            if (WindowState == FormWindowState.Normal && Width != scaledWidth)
+                Width = scaledWidth;
+
+            if (!_initialDpiSizeApplied)
+            {
+                _initialDpiSizeApplied = true;
+                var preferredHeight = MainFormLayoutPolicy.ScaleLogical(PreferredWindowHeight, DeviceDpi);
+                var workingHeight = Math.Max(scaledMinimumHeight, Screen.FromControl(this).WorkingArea.Height - 20);
+                Height = Math.Min(preferredHeight, workingHeight);
             }
         }
 

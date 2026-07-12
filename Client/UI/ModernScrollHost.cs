@@ -88,7 +88,7 @@ namespace RadioRelay.Client.UI
                 return;
             }
 
-            var extent = ContentPadding.Top + _content.Height + ContentPadding.Bottom;
+            var extent = ScaleLogical(ContentPadding.Top) + _content.Height + ScaleLogical(ContentPadding.Bottom);
             _scrollBar.LargeChange = Math.Max(1, _viewport.ClientSize.Height);
             _scrollBar.Maximum = Math.Max(0, extent - _viewport.ClientSize.Height);
             PositionContent();
@@ -136,9 +136,12 @@ namespace RadioRelay.Client.UI
             _layoutInProgress = true;
             try
             {
-                var availableWidth = Math.Max(1, _viewport.ClientSize.Width - ContentPadding.Horizontal);
-                var minimum = Math.Min(MinimumContentWidth, availableWidth);
-                var width = Math.Clamp(availableWidth, minimum, Math.Max(minimum, MaximumContentWidth));
+                var horizontalPadding = ScaleLogical(ContentPadding.Left) + ScaleLogical(ContentPadding.Right);
+                var availableWidth = Math.Max(1, _viewport.ClientSize.Width - horizontalPadding);
+                var scaledMinimum = ScaleLogical(MinimumContentWidth);
+                var scaledMaximum = ScaleLogical(MaximumContentWidth);
+                var minimum = Math.Min(scaledMinimum, availableWidth);
+                var width = Math.Clamp(availableWidth, minimum, Math.Max(minimum, scaledMaximum));
 
                 if (_lastContentWidth != width)
                 {
@@ -160,8 +163,8 @@ namespace RadioRelay.Client.UI
         private void PositionContent()
         {
             if (_content == null) return;
-            var left = Math.Max(ContentPadding.Left, (_viewport.ClientSize.Width - _content.Width) / 2);
-            var top = ContentPadding.Top - _scrollBar.Value;
+            var left = Math.Max(ScaleLogical(ContentPadding.Left), (_viewport.ClientSize.Width - _content.Width) / 2);
+            var top = ScaleLogical(ContentPadding.Top) - _scrollBar.Value;
             if (_content.Left != left || _content.Top != top)
                 _content.Location = new Point(left, top);
         }
@@ -174,7 +177,7 @@ namespace RadioRelay.Client.UI
             var configuredLines = SystemInformation.MouseWheelScrollLines;
             var step = configuredLines < 0
                 ? _scrollBar.LargeChange
-                : Math.Max(32, configuredLines * 16);
+                : Math.Max(ScaleLogical(32), configuredLines * ScaleLogical(16));
             var amount = (int)Math.Round(step * (delta / (double)SystemInformation.MouseWheelScrollDelta));
             if (amount == 0) amount = Math.Sign(delta);
             _scrollBar.Value -= amount;
@@ -192,5 +195,7 @@ namespace RadioRelay.Client.UI
 
         private static bool PreservesOwnWheelBehavior(Control control) =>
             control is ComboBox or ListBox or TextBoxBase or NumericTextBox or ModernScrollBar;
+
+        private int ScaleLogical(int value) => MainFormLayoutPolicy.ScaleLogical(value, DeviceDpi);
     }
 }
