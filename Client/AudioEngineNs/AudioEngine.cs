@@ -306,6 +306,48 @@ namespace RadioRelay.Client.AudioEngineNs
             }
         }
 
+        /// Applies a listen-volume change immediately. Zero is a true receiver-off
+        /// state: queued audio and receive lifecycle/HUD state are discarded.
+        public void UpdateChannelVolume(RadioChannel channel)
+        {
+            lock (_stateLock)
+            {
+                if (_channelBuffers.TryGetValue(channel, out var entry))
+                    entry.vol.Volume = BoostVolume(channel.Volume);
+
+                if (RadioReceiveMute.IsReceiveDisabled(channel.Volume) &&
+                    _rxState.TryGetValue(channel, out var rxState))
+                {
+                    DisableChannelReceive(channel, rxState);
+                }
+
+                if (RadioReceiveMute.IsReceiveDisabled(channel.Volume) &&
+                    _txState.TryGetValue(channel, out var txState) &&
+                    txState.IsActive)
+                {
+                    SetTransmitting(channel, false);
+                }
+            }
+        }
+
+        private void DisableChannelReceive(RadioChannel channel, RxState rxState)
+        {
+            if (_jitterBuffers.TryGetValue(channel, out var jitter)) jitter.Reset();
+            if (_channelBuffers.TryGetValue(channel, out var receiveEntry)) receiveEntry.buffer.ClearBuffer();
+
+            rxState.IsReceivingActive = false;
+            rxState.PendingRemoteClientId = "";
+            rxState.PendingRemoteCallsign = "";
+            rxState.HasAudibleReceiveInFlight = false;
+            rxState.LastRemotePacketUtc = null;
+            rxState.TalkOver.ClearRemoteTransmitters();
+            rxState.TalkOverWarningCue.Reset();
+            rxState.Interference.Reset();
+            rxState.CollisionDestruction.Reset();
+            EndAllRemoteReceiveHuds(channel, rxState, (_, remoteCallsign, remoteClientId) =>
+                RaiseRemoteTransmissionEnded(channel, remoteCallsign, remoteClientId));
+        }
+
         /// Gets (rebuilding if the channel's band has changed since
         /// last time) the tunable txEffect/rxEffect/noise profile for
         /// whatever band this channel's frequency currently falls in.
@@ -339,6 +381,7 @@ namespace RadioRelay.Client.AudioEngineNs
             lock (_stateLock)
             {
                 if (!_txState.TryGetValue(channel, out var state)) return;
+                if (active && !RadioReceiveMute.CanStartTransmission(channel.Volume)) return;
                 if (active == state.IsActive) return;
                 state.IsActive = active;
 
@@ -548,6 +591,12 @@ namespace RadioRelay.Client.AudioEngineNs
                     if (!_channelBuffers.TryGetValue(ch, out var entry)) continue;
                     if (!_jitterBuffers.TryGetValue(ch, out var jitter)) continue;
                     if (!_rxState.TryGetValue(ch, out var rxState)) continue;
+
+                    if (RadioReceiveMute.IsReceiveDisabled(ch.Volume))
+                    {
+                        DisableChannelReceive(ch, rxState);
+                        continue;
+                    }
 
                     if (!PacketMatchesChannelForReceiveControl(ch, packet)) continue;
                     rxState.LastRemotePacketUtc = DateTime.UtcNow;
@@ -936,6 +985,12 @@ namespace RadioRelay.Client.AudioEngineNs
                     if (!_channelBuffers.TryGetValue(ch, out var entry)) continue;
                     if (!_rxState.TryGetValue(ch, out var rxState)) continue;
 
+                    if (RadioReceiveMute.IsReceiveDisabled(ch.Volume))
+                    {
+                        DisableChannelReceive(ch, rxState);
+                        continue;
+                    }
+
                     QueueTalkOverWarningFrame(ch, rxState);
 
                     var result = jitter.Tick();
@@ -1082,6 +1137,7 @@ namespace RadioRelay.Client.AudioEngineNs
 
         private void QueueTalkOverWarningFrame(RadioChannel channel, RxState rxState)
         {
+            if (RadioReceiveMute.IsReceiveDisabled(channel.Volume)) return;
             if (!rxState.TalkOver.HasActiveOverlap) return;
             if (!_sidetoneBuffers.TryGetValue(channel, out var sidetone)) return;
 

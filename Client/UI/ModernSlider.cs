@@ -174,8 +174,6 @@ namespace RadioRelay.Client.UI
         protected override void OnMouseWheel(MouseEventArgs e)
         {
             base.OnMouseWheel(e);
-            if (!Enabled) return;
-            Value += e.Delta > 0 ? Math.Max(1, SmallChange) : -Math.Max(1, SmallChange);
         }
 
         protected override void OnKeyDown(KeyEventArgs e)

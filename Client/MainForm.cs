@@ -19,6 +19,7 @@ namespace RadioRelay.Client
         private class RadioRow
         {
             public required RadioChannel Channel;
+            public required TextBox NameBox;
             public required NumericTextBox Freq;
             public required ModernSlider Vol;
             public required DarkComboBox Ear;
@@ -121,6 +122,9 @@ namespace RadioRelay.Client
         private bool _hudEditMode;
         private bool _connectionEstablished;
         private bool _controlLockEnabled;
+        private readonly CancellationTokenSource _updateCheckCancellation = new();
+        private string? _availableUpdateUrl;
+        private bool _updateCheckStarted;
 
         private readonly TextBox _serverBox = new() { Text = "127.0.0.1" };
         private readonly NumericTextBox _portBox = new() { Minimum = 1, Maximum = 65535, Value = 5060 };
@@ -232,6 +236,7 @@ namespace RadioRelay.Client
             var saved = _settings.Radios.Find(r => r.Name == ch.Name)
                 ?? (ch.Name == "RADIO 3" ? _settings.Radios.Find(r => r.Name == "INTERCOM") : null);
             if (saved == null) return;
+            ch.LocalName = saved.LocalName;
             ch.Frequency = Math.Clamp(saved.Frequency, 2f, 999f);
             ch.Volume = Math.Clamp(saved.Volume, 0f, 1f);
             ch.Ear = saved.Ear;
@@ -253,6 +258,56 @@ namespace RadioRelay.Client
             control.Margin = new Padding(0, 0, 0, bottomMargin);
             _page.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             _page.Controls.Add(control, 0, _page.RowCount++);
+        }
+
+        internal static float GetRadioNameFontSize(string text, int availableWidth)
+        {
+            const float minimumSize = 4f;
+            const int textBoxInsetAndCaret = 14;
+            var normalSize = Theme.RadioTitleFont.Size;
+            if (string.IsNullOrEmpty(text) || availableWidth <= 0) return normalSize;
+
+            var safeWidth = Math.Max(1, availableWidth - textBoxInsetAndCaret);
+
+            var measuredWidth = TextRenderer.MeasureText(
+                text,
+                Theme.RadioTitleFont,
+                Size.Empty,
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+            if (measuredWidth <= safeWidth) return normalSize;
+
+            var size = Math.Clamp(normalSize * safeWidth / measuredWidth, minimumSize, normalSize);
+            while (size > minimumSize)
+            {
+                using var candidate = new Font(
+                    Theme.RadioTitleFont.FontFamily,
+                    size,
+                    Theme.RadioTitleFont.Style,
+                    GraphicsUnit.Point);
+                var candidateWidth = TextRenderer.MeasureText(
+                    text,
+                    candidate,
+                    Size.Empty,
+                    TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+                if (candidateWidth <= safeWidth) return size;
+                size = Math.Max(minimumSize, size - 0.25f);
+            }
+
+            return minimumSize;
+        }
+
+        private static void FitRadioNameFont(TextBox nameBox)
+        {
+            var availableWidth = Math.Max(1, nameBox.ClientSize.Width - 2);
+            var size = GetRadioNameFontSize(nameBox.Text, availableWidth);
+            if (Math.Abs(nameBox.Font.Size - size) < 0.05f) return;
+
+            var previousFont = nameBox.Font;
+            nameBox.Font = Math.Abs(size - Theme.RadioTitleFont.Size) < 0.05f
+                ? Theme.RadioTitleFont
+                : new Font(Theme.RadioTitleFont.FontFamily, size, Theme.RadioTitleFont.Style, GraphicsUnit.Point);
+
+            if (!ReferenceEquals(previousFont, Theme.RadioTitleFont)) previousFont.Dispose();
         }
 
         private Panel CreateStrip(int height)
@@ -341,7 +396,7 @@ namespace RadioRelay.Client
         {
             Text = text.ToUpperInvariant(),
             AutoSize = true,
-            ForeColor = Theme.FaintText,
+            ForeColor = Theme.HeaderText,
             Font = Theme.SmallMonoFont,
             Margin = new Padding(0, 0, 0, 3)
         };
@@ -548,7 +603,7 @@ namespace RadioRelay.Client
                 Text = subtitle.ToUpperInvariant(),
                 AutoSize = true,
                 Anchor = AnchorStyles.Right,
-                ForeColor = Theme.FaintText,
+                ForeColor = Theme.HeaderText,
                 Font = Theme.SmallMonoFont,
                 Margin = new Padding(10, 0, 0, 0)
             };
@@ -860,7 +915,7 @@ namespace RadioRelay.Client
         }
 
         private static TableLayoutPanel CreateRadioHeaderRow(
-            RadioChannel channel,
+            TextBox nameBox,
             Label userCountLabel,
             TextBox passcode,
             Label encryptState,
@@ -888,17 +943,6 @@ namespace RadioRelay.Client
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 70));
 
-            var title = new Label
-            {
-                Text = channel.Name,
-                AutoSize = false,
-                Dock = DockStyle.Fill,
-                ForeColor = Theme.Text,
-                Font = Theme.RadioTitleFont,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Margin = new Padding(0, 0, 0, 8)
-            };
-
             userCountLabel.Margin = new Padding(0);
             userCountLabel.TextAlign = ContentAlignment.MiddleLeft;
 
@@ -920,7 +964,7 @@ namespace RadioRelay.Client
             if (statusBadge is StatusBadge badge)
                 badge.FlatRightEdge = true;
 
-            row.Controls.Add(title, 0, 0);
+            row.Controls.Add(nameBox, 0, 0);
             row.Controls.Add(CreateFixedField("Users", userCountLabel, 76), 2, 0);
             row.Controls.Add(CreateCompactField("Key", passcode, 120), 4, 0);
             row.Controls.Add(CreateFixedField("", encryptState, 76), 6, 0);
@@ -1221,6 +1265,24 @@ namespace RadioRelay.Client
             {
                 var card = CreateRadioCard(ch, out var body, out var statusBadge, out var rail, out var userCountHeaderLabel);
 
+                var nameBox = new TextBox
+                {
+                    Text = ch.DisplayName,
+                    BorderStyle = BorderStyle.None,
+                    BackColor = Theme.CardBackground,
+                    ForeColor = Theme.Text,
+                    Font = Theme.RadioTitleFont,
+                    MaxLength = 24,
+                    Dock = DockStyle.Fill,
+                    Margin = new Padding(0, 10, 0, 8),
+                    AccessibleName = $"{ch.Name} name"
+                };
+                nameBox.SizeChanged += (_, _) => FitRadioNameFont(nameBox);
+                nameBox.Disposed += (_, _) =>
+                {
+                    if (!ReferenceEquals(nameBox.Font, Theme.RadioTitleFont)) nameBox.Font.Dispose();
+                };
+
                 var freq = new NumericTextBox
                 {
                     Width = 108,
@@ -1273,7 +1335,8 @@ namespace RadioRelay.Client
                 StyleButton(colorButton);
                 colorButton.BackColor = ch.HudColor;
 
-                body.Controls.Add(CreateRadioHeaderRow(ch, userCountHeaderLabel, passcode, encryptState, colorButton, statusBadge), 0, 0);
+                body.Controls.Add(CreateRadioHeaderRow(nameBox, userCountHeaderLabel, passcode, encryptState, colorButton, statusBadge), 0, 0);
+                FitRadioNameFont(nameBox);
                 body.Controls.Add(CreateRadioSettingsRow(freq, vol, volValue, ear), 0, 1);
 
                 var pttPrimaryButton = new ModernButton { Text = "PTT A", Width = 74, Height = 30 };
@@ -1291,6 +1354,7 @@ namespace RadioRelay.Client
                 _radioRows.Add(new RadioRow
                 {
                     Channel = ch,
+                    NameBox = nameBox,
                     Freq = freq,
                     Vol = vol,
                     Ear = ear,
@@ -1306,6 +1370,7 @@ namespace RadioRelay.Client
                     VolumeValueLabel = volValue,
                     EncryptStateLabel = encryptState
                 });
+                UpdateRadioActivity(ch);
                 AddPageRow(card, 10);
             }
 
@@ -1357,13 +1422,61 @@ namespace RadioRelay.Client
             base.OnShown(e);
             ClientDiagnostics.Current?.LogLifecycle(ErrorCodes.ClientFormShown, "main form shown");
             FinalizeFixedWidthLayout();
+            if (!_updateCheckStarted)
+            {
+                _updateCheckStarted = true;
+                _ = CheckForUpdatesAsync();
+            }
+        }
+
+        private async System.Threading.Tasks.Task CheckForUpdatesAsync()
+        {
+            try
+            {
+                var update = await GitHubUpdateChecker.CheckAsync(
+                    ApplicationVersion.Current,
+                    _updateCheckCancellation.Token);
+                if (update == null || IsDisposed || Disposing) return;
+
+                _availableUpdateUrl = update.ReleaseUrl;
+                TitleBar.UpdateText = $"UPDATE {update.Version}";
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception) { }
+        }
+
+        private void OpenAvailableUpdate()
+        {
+            if (string.IsNullOrWhiteSpace(_availableUpdateUrl)) return;
+
+            try
+            {
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = _availableUpdateUrl,
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                LogSafe($"Unable to open update page: {ex.Message}");
+            }
         }
 
         private void WireEvents()
         {
+            TitleBar.UpdateRequested += (_, _) => OpenAvailableUpdate();
+
             foreach (var row in _radioRows)
             {
                 var localRow = row;
+
+                localRow.NameBox.TextChanged += (_, _) =>
+                {
+                    localRow.Channel.LocalName = localRow.NameBox.Text;
+                    FitRadioNameFont(localRow.NameBox);
+                    _overlay.Invalidate();
+                };
 
                 localRow.Freq.ValueChanged += (_, _) =>
                 {
@@ -1374,6 +1487,14 @@ namespace RadioRelay.Client
                 {
                     localRow.Channel.Volume = localRow.Vol.Value / 100f;
                     localRow.VolumeValueLabel.Text = $"{localRow.Vol.Value}%";
+                    if (localRow.Channel.Volume <= 0f)
+                    {
+                        CancelPttReleaseTimer(localRow.Channel);
+                        _activityTracker.RemoteEnded(localRow.Channel, "");
+                        _overlay.SuppressChannel(localRow.Channel);
+                    }
+                    _audioEngine?.UpdateChannelVolume(localRow.Channel);
+                    UpdateRadioActivity(localRow.Channel);
                 };
                 localRow.Ear.SelectedIndexChanged += (_, _) =>
                 {
@@ -1478,7 +1599,9 @@ namespace RadioRelay.Client
         private void OnTransmissionStarted(TransmissionEventArgs e)
         {
             if (InvokeRequired) { PostToUi(() => OnTransmissionStarted(e)); return; }
-            _overlay.ShowTransmission(e.Channel, e.IsLocalTransmit, e.RemoteCallsign, _callsignBox.Text, e.RemoteClientId, e.LifecycleSequence);
+            if (!e.IsLocalTransmit && e.Channel.Volume <= 0f) return;
+            if (e.Channel.Volume > 0f)
+                _overlay.ShowTransmission(e.Channel, e.IsLocalTransmit, e.RemoteCallsign, _callsignBox.Text, e.RemoteClientId, e.LifecycleSequence);
             if (e.IsLocalTransmit) _activityTracker.LocalStarted(e.Channel, e.LifecycleSequence);
             else _activityTracker.RemoteStarted(e.Channel, e.RemoteClientId, e.LifecycleSequence);
             UpdateRadioActivity(e.Channel);
@@ -1497,6 +1620,16 @@ namespace RadioRelay.Client
         {
             var row = _radioRows.Find(r => ReferenceEquals(r.Channel, channel));
             if (row == null) return;
+            if (channel.Volume <= 0f)
+            {
+                row.StatusBadge.Text = "OFF";
+                row.StatusBadge.ForeColor = Color.White;
+                row.StatusBadge.BackColor = Theme.AccentRed;
+                row.Rail.BackColor = Theme.AccentRed;
+                row.StatusBadge.Invalidate();
+                return;
+            }
+
             var activity = _activityTracker.GetActivity(channel);
             if (activity == RadioActivityKind.Transmitting)
             {
@@ -1574,6 +1707,7 @@ namespace RadioRelay.Client
 
             foreach (var row in _radioRows)
             {
+                row.NameBox.Enabled = state.CanEditName;
                 row.Freq.Enabled = state.CanEditFrequency;
                 row.Passcode.Enabled = state.CanEditPasscode;
                 row.PttPrimaryButton.Enabled = state.CanChangePttBinding;
@@ -1655,6 +1789,7 @@ namespace RadioRelay.Client
                 _settings.Radios.Add(new RadioSettings
                 {
                     Name = row.Channel.Name,
+                    LocalName = row.Channel.LocalName,
                     Frequency = row.Channel.Frequency,
                     Volume = row.Channel.Volume,
                     Ear = row.Channel.Ear,
@@ -1673,16 +1808,21 @@ namespace RadioRelay.Client
         private void ExportSettings()
         {
             SaveCurrentSettings();
-            using var dialog = new FolderBrowserDialog
+            using var dialog = new SaveFileDialog
             {
-                Description = "Export Folder"
+                Title = "Export RadioRelay Settings",
+                Filter = "RadioRelay settings (*.json)|*.json|All files (*.*)|*.*",
+                DefaultExt = "json",
+                AddExtension = true,
+                OverwritePrompt = true,
+                FileName = AppSettings.ExportFileName
             };
 
             if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
             try
             {
-                var path = _settings.ExportToDirectory(dialog.SelectedPath);
+                var path = _settings.ExportToFile(dialog.FileName);
                 LogSafe($"Settings exported to {path}");
             }
             catch (Exception ex)
@@ -1697,8 +1837,7 @@ namespace RadioRelay.Client
             using var dialog = new OpenFileDialog
             {
                 Title = "Import RadioRelay Settings",
-                Filter = "RadioRelay settings (*.json)|*.json|All files (*.*)|*.*",
-                FileName = AppSettings.ExportFileName
+                Filter = "RadioRelay settings (*.json)|*.json|All files (*.*)|*.*"
             };
 
             if (dialog.ShowDialog(this) != DialogResult.OK) return;
@@ -1706,6 +1845,10 @@ namespace RadioRelay.Client
             try
             {
                 var imported = AppSettings.ImportFromFile(dialog.FileName);
+                // Capture current machine-local identity, devices, audio controls,
+                // bindings, HUD preferences, and radio names before merging the
+                // operational profile. Imports must never replace those values.
+                SaveCurrentSettings();
                 _settings.CopyFrom(imported);
                 ApplyImportedSettingsToUi();
                 _settings.Save();
@@ -1720,17 +1863,25 @@ namespace RadioRelay.Client
 
         private void ApplyImportedSettingsToUi()
         {
+            ApplyImportedConnectionSettingsToUi();
             ApplySavedRadioSettingsToExistingChannels();
             ApplyChannelSettingsToRows();
-            ApplySavedGlobalSettings();
-            ApplySavedPttBindings();
             ResubscribeIfConnected();
+        }
+
+        private void ApplyImportedConnectionSettingsToUi()
+        {
+            _serverBox.Text = _settings.ServerIp;
+            _serverPasswordBox.Text = _settings.ServerPassword;
+            if (_settings.Port >= (int)_portBox.Minimum && _settings.Port <= (int)_portBox.Maximum)
+                _portBox.Value = _settings.Port;
         }
 
         private void ApplyChannelSettingsToRows()
         {
             foreach (var row in _radioRows)
             {
+                row.NameBox.Text = row.Channel.DisplayName;
                 row.Freq.Value = (decimal)Math.Clamp(row.Channel.Frequency, (float)row.Freq.Minimum, (float)row.Freq.Maximum);
                 row.Vol.Value = Math.Clamp((int)Math.Round(row.Channel.Volume * 100), row.Vol.Minimum, row.Vol.Maximum);
                 row.VolumeValueLabel.Text = $"{row.Vol.Value}%";
@@ -1739,6 +1890,8 @@ namespace RadioRelay.Client
                 UpdateEncryptState(row);
                 row.ColorButton.BackColor = row.Channel.HudColor;
                 _overlay.SetUserCount(row.Channel, 0);
+                if (row.Channel.Volume <= 0f) _overlay.SuppressChannel(row.Channel);
+                UpdateRadioActivity(row.Channel);
             }
         }
 
@@ -1753,6 +1906,8 @@ namespace RadioRelay.Client
 
         private void OnPttDown(RadioChannel channel)
         {
+            if (!RadioReceiveMute.CanStartTransmission(channel.Volume)) return;
+
             if (_pttReleaseTimers.TryGetValue(channel, out var existing))
             {
                 existing.Dispose();
@@ -1761,8 +1916,22 @@ namespace RadioRelay.Client
             _audioEngine?.SetTransmitting(channel, true);
         }
 
+        private void CancelPttReleaseTimer(RadioChannel channel)
+        {
+            if (!_pttReleaseTimers.TryGetValue(channel, out var timer)) return;
+            timer.Dispose();
+            _pttReleaseTimers.Remove(channel);
+        }
+
         private void OnPttUp(RadioChannel channel)
         {
+            if (!RadioReceiveMute.CanStartTransmission(channel.Volume))
+            {
+                CancelPttReleaseTimer(channel);
+                _audioEngine?.SetTransmitting(channel, false);
+                return;
+            }
+
             if (_pttReleaseDelayMs <= 0)
             {
                 _audioEngine?.SetTransmitting(channel, false);
@@ -1955,6 +2124,8 @@ namespace RadioRelay.Client
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             ClientDiagnostics.Current?.LogLifecycle(ErrorCodes.ClientFormClosed, "main form closed");
+            _updateCheckCancellation.Cancel();
+            _updateCheckCancellation.Dispose();
             SaveCurrentSettings();
 
             foreach (var timer in _pttReleaseTimers.Values) timer.Dispose();

@@ -8,6 +8,19 @@ namespace RadioRelay.Tests;
 public class AppSettingsImportExportTests
 {
     [Fact]
+    public void ExportToFile_uses_the_user_selected_file_name()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "RadioRelayNamedExportTests", Guid.NewGuid().ToString("N"));
+        var selectedPath = Path.Combine(dir, "night-operation-profile.json");
+        var settings = new AppSettings();
+
+        var exportedPath = settings.ExportToFile(selectedPath);
+
+        Assert.Equal(Path.GetFullPath(selectedPath), exportedPath);
+        Assert.True(File.Exists(selectedPath));
+    }
+
+    [Fact]
     public void ExportToDirectory_writes_only_operational_drop_in_settings()
     {
         var dir = Path.Combine(Path.GetTempPath(), "RadioRelayExportTests", Guid.NewGuid().ToString("N"));
@@ -31,6 +44,7 @@ public class AppSettingsImportExportTests
                 new()
                 {
                     Name = "RADIO 1",
+                    LocalName = "Guard",
                     Frequency = 251.000f,
                     Volume = 0.75f,
                     Ear = RadioEar.Left,
@@ -75,6 +89,7 @@ public class AppSettingsImportExportTests
         Assert.False(radio.TryGetProperty("HudColorArgb", out _));
         Assert.False(radio.TryGetProperty("HudX", out _));
         Assert.False(radio.TryGetProperty("HudY", out _));
+        Assert.False(radio.TryGetProperty("LocalName", out _));
     }
 
     [Fact]
@@ -133,6 +148,7 @@ public class AppSettingsImportExportTests
                 new()
                 {
                     Name = "RADIO 1",
+                    LocalName = "Local Guard",
                     Frequency = 240.000f,
                     Volume = 0.45f,
                     Ear = RadioEar.Left,
@@ -150,6 +166,8 @@ public class AppSettingsImportExportTests
             Port = 2222,
             ServerPassword = "new-password",
             Callsign = "ImportedPilot",
+            InputDeviceIndex = 99,
+            OutputDeviceIndex = 98,
             InputGain = 0.1f,
             Radios = new List<RadioSettings>
             {
@@ -174,6 +192,7 @@ public class AppSettingsImportExportTests
 
         var radio = Assert.Single(local.Radios);
         Assert.Equal("RADIO 1", radio.Name);
+        Assert.Equal("Local Guard", radio.LocalName);
         Assert.Equal(251.000f, radio.Frequency);
         Assert.Equal("new-red", radio.Passcode);
         Assert.Equal(0.45f, radio.Volume);

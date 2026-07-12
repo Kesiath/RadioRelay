@@ -80,4 +80,36 @@ public class TransmissionOverlayPresenceTests
         Assert.Contains("3 users", secondHeader);
         Assert.DoesNotContain("0 users", secondHeader);
     }
+
+    [Fact]
+    public void Local_radio_name_is_used_in_transmission_header()
+    {
+        var channel = new RadioChannel { Name = "RADIO 1", LocalName = "Guard", Frequency = 251.000f };
+        using var overlay = new TransmissionOverlayForm(new List<RadioChannel> { channel });
+
+        overlay.ShowTransmission(channel, isLocalTransmit: true, remoteCallsign: "", localCallsign: "Uzi 1");
+
+        var header = overlay.GetHeadersForTest(channel).Single();
+        Assert.Contains("Guard", header);
+        Assert.DoesNotContain("RADIO 1", header);
+    }
+
+    [Fact]
+    public void Off_radio_suppresses_transmission_ui_but_preserves_user_count()
+    {
+        var channel = new RadioChannel { Name = "RADIO 1", Frequency = 251.000f, Volume = 1f };
+        using var overlay = new TransmissionOverlayForm(new List<RadioChannel> { channel });
+        overlay.SetUserCount(channel, 3);
+        overlay.ShowTransmission(channel, isLocalTransmit: false, remoteCallsign: "Banshee", localCallsign: "", remoteClientId: "alpha");
+
+        channel.Volume = 0f;
+        overlay.SuppressChannel(channel);
+        overlay.ShowTransmission(channel, isLocalTransmit: false, remoteCallsign: "Viper", localCallsign: "", remoteClientId: "bravo");
+
+        Assert.Empty(overlay.GetHeadersForTest(channel));
+
+        channel.Volume = 1f;
+        overlay.SetEditMode(true);
+        Assert.Contains("3 users", overlay.GetHeadersForTest(channel).Single());
+    }
 }

@@ -2,7 +2,7 @@ namespace RadioRelay.Client
 {
     public static class ApplicationVersion
     {
-        public const string Current = "1.5.8";
+        public const string Current = "1.6.0";
         public const string DisplayName = "RadioRelay " + Current;
     }
 }

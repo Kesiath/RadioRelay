@@ -74,6 +74,28 @@ public class DarkComboBoxTests
         Assert.Equal(Theme.FieldBackground.ToArgb(), bitmap.GetPixel(combo.Width - 1, combo.Height - 1).ToArgb());
     }
 
+    [Fact]
+    public void Dropdown_expands_to_show_long_device_names()
+    {
+        using var combo = new DarkComboBox
+        {
+            Size = new Size(280, 21),
+            DropDownWidth = 360
+        };
+        var deviceName = "SteelSeries Sonar - Gaming (SteelSeries Sonar Virtual Audio Device)";
+        combo.Items.Add(deviceName);
+
+        var width = combo.CalculateDropDownWidth(1920);
+        var textWidth = TextRenderer.MeasureText(
+            deviceName,
+            combo.Font,
+            Size.Empty,
+            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+
+        Assert.True(width > combo.DropDownWidth);
+        Assert.True(width >= textWidth + 20 + SystemInformation.VerticalScrollBarWidth);
+    }
+
     private static void InvokePrivate(object instance, string methodName)
     {
         instance.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(instance, null);

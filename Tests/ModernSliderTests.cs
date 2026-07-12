@@ -39,4 +39,18 @@ public class ModernSliderTests
 
         Assert.Equal(System.Drawing.Color.Transparent, slider.BackColor);
     }
+
+    [Fact]
+    public void Mouse_wheel_does_not_change_slider_value()
+    {
+        using var slider = new ModernSlider { Minimum = 0, Maximum = 100, Value = 50 };
+        var method = typeof(ModernSlider).GetMethod(
+            "OnMouseWheel",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+
+        method.Invoke(slider, new object[] { new System.Windows.Forms.MouseEventArgs(
+            System.Windows.Forms.MouseButtons.None, 0, 0, 0, 120) });
+
+        Assert.Equal(50, slider.Value);
+    }
 }
