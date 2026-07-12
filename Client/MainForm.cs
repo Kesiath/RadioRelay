@@ -1808,16 +1808,21 @@ namespace RadioRelay.Client
         private void ExportSettings()
         {
             SaveCurrentSettings();
-            using var dialog = new FolderBrowserDialog
+            using var dialog = new SaveFileDialog
             {
-                Description = "Export Folder"
+                Title = "Export RadioRelay Settings",
+                Filter = "RadioRelay settings (*.json)|*.json|All files (*.*)|*.*",
+                DefaultExt = "json",
+                AddExtension = true,
+                OverwritePrompt = true,
+                FileName = AppSettings.ExportFileName
             };
 
             if (dialog.ShowDialog(this) != DialogResult.OK) return;
 
             try
             {
-                var path = _settings.ExportToDirectory(dialog.SelectedPath);
+                var path = _settings.ExportToFile(dialog.FileName);
                 LogSafe($"Settings exported to {path}");
             }
             catch (Exception ex)
@@ -1832,8 +1837,7 @@ namespace RadioRelay.Client
             using var dialog = new OpenFileDialog
             {
                 Title = "Import RadioRelay Settings",
-                Filter = "RadioRelay settings (*.json)|*.json|All files (*.*)|*.*",
-                FileName = AppSettings.ExportFileName
+                Filter = "RadioRelay settings (*.json)|*.json|All files (*.*)|*.*"
             };
 
             if (dialog.ShowDialog(this) != DialogResult.OK) return;

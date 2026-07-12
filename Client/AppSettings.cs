@@ -118,10 +118,16 @@ namespace RadioRelay.Client
 
         public string ExportToDirectory(string directoryPath)
         {
-            Directory.CreateDirectory(directoryPath);
-            var filePath = Path.Combine(directoryPath, ExportFileName);
-            File.WriteAllText(filePath, ToExportJson());
-            return filePath;
+            return ExportToFile(Path.Combine(directoryPath, ExportFileName));
+        }
+
+        public string ExportToFile(string filePath)
+        {
+            var fullPath = Path.GetFullPath(filePath);
+            var directory = Path.GetDirectoryName(fullPath)!;
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(fullPath, ToExportJson());
+            return fullPath;
         }
 
         public static AppSettings ImportFromFile(string filePath)

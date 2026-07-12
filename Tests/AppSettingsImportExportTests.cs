@@ -8,6 +8,19 @@ namespace RadioRelay.Tests;
 public class AppSettingsImportExportTests
 {
     [Fact]
+    public void ExportToFile_uses_the_user_selected_file_name()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "RadioRelayNamedExportTests", Guid.NewGuid().ToString("N"));
+        var selectedPath = Path.Combine(dir, "night-operation-profile.json");
+        var settings = new AppSettings();
+
+        var exportedPath = settings.ExportToFile(selectedPath);
+
+        Assert.Equal(Path.GetFullPath(selectedPath), exportedPath);
+        Assert.True(File.Exists(selectedPath));
+    }
+
+    [Fact]
     public void ExportToDirectory_writes_only_operational_drop_in_settings()
     {
         var dir = Path.Combine(Path.GetTempPath(), "RadioRelayExportTests", Guid.NewGuid().ToString("N"));
