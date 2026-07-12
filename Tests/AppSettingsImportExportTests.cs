@@ -166,6 +166,8 @@ public class AppSettingsImportExportTests
             Port = 2222,
             ServerPassword = "new-password",
             Callsign = "ImportedPilot",
+            InputDeviceIndex = 99,
+            OutputDeviceIndex = 98,
             InputGain = 0.1f,
             Radios = new List<RadioSettings>
             {

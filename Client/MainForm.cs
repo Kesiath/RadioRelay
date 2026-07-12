@@ -1845,6 +1845,10 @@ namespace RadioRelay.Client
             try
             {
                 var imported = AppSettings.ImportFromFile(dialog.FileName);
+                // Capture current machine-local identity, devices, audio controls,
+                // bindings, HUD preferences, and radio names before merging the
+                // operational profile. Imports must never replace those values.
+                SaveCurrentSettings();
                 _settings.CopyFrom(imported);
                 ApplyImportedSettingsToUi();
                 _settings.Save();
@@ -1859,11 +1863,18 @@ namespace RadioRelay.Client
 
         private void ApplyImportedSettingsToUi()
         {
+            ApplyImportedConnectionSettingsToUi();
             ApplySavedRadioSettingsToExistingChannels();
             ApplyChannelSettingsToRows();
-            ApplySavedGlobalSettings();
-            ApplySavedPttBindings();
             ResubscribeIfConnected();
+        }
+
+        private void ApplyImportedConnectionSettingsToUi()
+        {
+            _serverBox.Text = _settings.ServerIp;
+            _serverPasswordBox.Text = _settings.ServerPassword;
+            if (_settings.Port >= (int)_portBox.Minimum && _settings.Port <= (int)_portBox.Maximum)
+                _portBox.Value = _settings.Port;
         }
 
         private void ApplyChannelSettingsToRows()
