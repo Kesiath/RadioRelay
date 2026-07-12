@@ -4,6 +4,19 @@ namespace RadioRelay.Tests;
 
 public class MainFormLayoutPolicyTests
 {
+    [Theory]
+    [InlineData(96, 820, 760)]
+    [InlineData(144, 1230, 1140)]
+    [InlineData(192, 1640, 1520)]
+    public void Fixed_window_and_content_widths_scale_with_monitor_dpi(
+        int dpi,
+        int expectedWindowWidth,
+        int expectedContentWidth)
+    {
+        Assert.Equal(expectedWindowWidth, MainFormLayoutPolicy.ScaleLogical(MainFormLayoutPolicy.FixedWindowWidth, dpi));
+        Assert.Equal(expectedContentWidth, MainFormLayoutPolicy.ScaleLogical(MainFormLayoutPolicy.MaxContentWidth, dpi));
+    }
+
     [Fact]
     public void Main_window_keeps_a_fixed_width_but_supports_a_smaller_height()
     {
