@@ -12,6 +12,16 @@ public class RadioReceiveMuteTests
         Assert.False(RadioReceiveMute.ShouldMuteReceivedAudio(localTransmitting: false));
     }
 
+    [Theory]
+    [InlineData(0f, true)]
+    [InlineData(0.01f, false)]
+    [InlineData(1f, false)]
+    public void Zero_volume_disables_the_receiver(float volume, bool expectedDisabled)
+    {
+        Assert.Equal(expectedDisabled, RadioReceiveMute.IsReceiveDisabled(volume));
+        Assert.Equal(!expectedDisabled, RadioReceiveMute.CanStartTransmission(volume));
+    }
+
     [Fact]
     public void Reset_discards_pending_jitter_playout_when_local_transmit_starts()
     {

@@ -179,6 +179,8 @@ namespace RadioRelay.Client.UI
             string remoteClientId = "",
             long? lifecycleSequence = null)
         {
+            if (channel.Volume <= 0f) return;
+
             string who = isLocalTransmit
                 ? (string.IsNullOrWhiteSpace(localCallsign) ? "You" : localCallsign)
                 : (string.IsNullOrWhiteSpace(remoteCallsign) ? "Unknown" : remoteCallsign);
@@ -197,6 +199,20 @@ namespace RadioRelay.Client.UI
                     if (!AcceptRxLifecycle(channel, key, lifecycleSequence)) return;
                     chip.RxWhos[key] = who;
                 }
+            }
+            SafeInvoke(Invalidate);
+        }
+
+        /// Removes transmission content for an off radio while preserving its
+        /// independently-updated presence count.
+        public void SuppressChannel(RadioChannel channel)
+        {
+            lock (_lock)
+            {
+                if (!_chips.TryGetValue(channel, out var chip)) return;
+                chip.TxWho = null;
+                chip.RxWhos.Clear();
+                if (chip.UserCount == 0) _chips.Remove(channel);
             }
             SafeInvoke(Invalidate);
         }
@@ -297,6 +313,7 @@ namespace RadioRelay.Client.UI
         private List<ChipBlock> GetBlocksForChannel(RadioChannel ch)
         {
             var blocks = new List<ChipBlock>();
+            if (ch.Volume <= 0f) return blocks;
 
             ChipState? chip;
             lock (_lock) { _chips.TryGetValue(ch, out chip); }

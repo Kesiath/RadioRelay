@@ -1370,6 +1370,7 @@ namespace RadioRelay.Client
                     VolumeValueLabel = volValue,
                     EncryptStateLabel = encryptState
                 });
+                UpdateRadioActivity(ch);
                 AddPageRow(card, 10);
             }
 
@@ -1486,6 +1487,14 @@ namespace RadioRelay.Client
                 {
                     localRow.Channel.Volume = localRow.Vol.Value / 100f;
                     localRow.VolumeValueLabel.Text = $"{localRow.Vol.Value}%";
+                    if (localRow.Channel.Volume <= 0f)
+                    {
+                        CancelPttReleaseTimer(localRow.Channel);
+                        _activityTracker.RemoteEnded(localRow.Channel, "");
+                        _overlay.SuppressChannel(localRow.Channel);
+                    }
+                    _audioEngine?.UpdateChannelVolume(localRow.Channel);
+                    UpdateRadioActivity(localRow.Channel);
                 };
                 localRow.Ear.SelectedIndexChanged += (_, _) =>
                 {
@@ -1590,7 +1599,9 @@ namespace RadioRelay.Client
         private void OnTransmissionStarted(TransmissionEventArgs e)
         {
             if (InvokeRequired) { PostToUi(() => OnTransmissionStarted(e)); return; }
-            _overlay.ShowTransmission(e.Channel, e.IsLocalTransmit, e.RemoteCallsign, _callsignBox.Text, e.RemoteClientId, e.LifecycleSequence);
+            if (!e.IsLocalTransmit && e.Channel.Volume <= 0f) return;
+            if (e.Channel.Volume > 0f)
+                _overlay.ShowTransmission(e.Channel, e.IsLocalTransmit, e.RemoteCallsign, _callsignBox.Text, e.RemoteClientId, e.LifecycleSequence);
             if (e.IsLocalTransmit) _activityTracker.LocalStarted(e.Channel, e.LifecycleSequence);
             else _activityTracker.RemoteStarted(e.Channel, e.RemoteClientId, e.LifecycleSequence);
             UpdateRadioActivity(e.Channel);
@@ -1609,6 +1620,16 @@ namespace RadioRelay.Client
         {
             var row = _radioRows.Find(r => ReferenceEquals(r.Channel, channel));
             if (row == null) return;
+            if (channel.Volume <= 0f)
+            {
+                row.StatusBadge.Text = "OFF";
+                row.StatusBadge.ForeColor = Color.White;
+                row.StatusBadge.BackColor = Theme.AccentRed;
+                row.Rail.BackColor = Theme.AccentRed;
+                row.StatusBadge.Invalidate();
+                return;
+            }
+
             var activity = _activityTracker.GetActivity(channel);
             if (activity == RadioActivityKind.Transmitting)
             {
@@ -1854,6 +1875,8 @@ namespace RadioRelay.Client
                 UpdateEncryptState(row);
                 row.ColorButton.BackColor = row.Channel.HudColor;
                 _overlay.SetUserCount(row.Channel, 0);
+                if (row.Channel.Volume <= 0f) _overlay.SuppressChannel(row.Channel);
+                UpdateRadioActivity(row.Channel);
             }
         }
 
@@ -1868,6 +1891,8 @@ namespace RadioRelay.Client
 
         private void OnPttDown(RadioChannel channel)
         {
+            if (!RadioReceiveMute.CanStartTransmission(channel.Volume)) return;
+
             if (_pttReleaseTimers.TryGetValue(channel, out var existing))
             {
                 existing.Dispose();
@@ -1876,8 +1901,22 @@ namespace RadioRelay.Client
             _audioEngine?.SetTransmitting(channel, true);
         }
 
+        private void CancelPttReleaseTimer(RadioChannel channel)
+        {
+            if (!_pttReleaseTimers.TryGetValue(channel, out var timer)) return;
+            timer.Dispose();
+            _pttReleaseTimers.Remove(channel);
+        }
+
         private void OnPttUp(RadioChannel channel)
         {
+            if (!RadioReceiveMute.CanStartTransmission(channel.Volume))
+            {
+                CancelPttReleaseTimer(channel);
+                _audioEngine?.SetTransmitting(channel, false);
+                return;
+            }
+
             if (_pttReleaseDelayMs <= 0)
             {
                 _audioEngine?.SetTransmitting(channel, false);
