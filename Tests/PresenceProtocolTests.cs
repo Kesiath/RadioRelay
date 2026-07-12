@@ -71,6 +71,7 @@ public class PresenceProtocolTests
     {
         var packet = new PresenceUpdatePacket
         {
+            TotalUserCount = 5,
             Counts = new[]
             {
                 new PresenceChannelCount { Frequency = 251.000f, NetIdHash = KeyA, UserCount = 3 },
@@ -87,6 +88,7 @@ public class PresenceProtocolTests
         Assert.Equal(3, decoded.Counts[0].UserCount);
         Assert.Equal(KeyB, decoded.Counts[1].NetIdHash);
         Assert.Equal(1, decoded.Counts[1].UserCount);
+        Assert.Equal(5, decoded.TotalUserCount);
     }
 
     [Fact]

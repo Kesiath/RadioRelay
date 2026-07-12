@@ -81,6 +81,7 @@ namespace RadioRelay.Shared.Protocol
     public class PresenceUpdatePacket
     {
         public PresenceChannelCount[] Counts = Array.Empty<PresenceChannelCount>();
+        public int TotalUserCount;
 
         public byte[] Encode()
         {
@@ -94,6 +95,7 @@ namespace RadioRelay.Shared.Protocol
                 w.Write(PresenceSubscription.NormalizeHash(count.NetIdHash), 0, 8);
                 w.Write((ushort)Math.Clamp(count.UserCount, 0, ushort.MaxValue));
             }
+            w.Write((ushort)Math.Clamp(TotalUserCount, 0, ushort.MaxValue));
             return ms.ToArray();
         }
 
@@ -113,6 +115,8 @@ namespace RadioRelay.Shared.Protocol
                     UserCount = r.ReadUInt16()
                 };
             }
+            if (ms.Position + sizeof(ushort) <= ms.Length)
+                packet.TotalUserCount = r.ReadUInt16();
             return packet;
         }
     }

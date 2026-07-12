@@ -54,6 +54,7 @@ namespace RadioRelay.Client.Networking
 
         public event Action<AudioPacket>? AudioReceived;
         public event Action<PresenceChannelCount[]>? PresenceUpdated;
+        public event Action<int>? TotalUserCountUpdated;
         public event Action<string>? StatusChanged;
 
         /// Fires on every healthy/unhealthy transition, including
@@ -307,7 +308,9 @@ namespace RadioRelay.Client.Networking
 
             if (type == PacketType.PresenceUpdate)
             {
-                SafeInvoke(PresenceUpdated, PresenceUpdatePacket.Decode(data).Counts);
+                var presence = PresenceUpdatePacket.Decode(data);
+                SafeInvoke(PresenceUpdated, presence.Counts);
+                SafeInvoke(TotalUserCountUpdated, presence.TotalUserCount);
                 return;
             }
 

@@ -459,7 +459,11 @@ namespace RadioRelay.Server
                     ? client.Subscriptions
                     : Array.ConvertAll(client.Frequencies,
                         f => new PresenceSubscription { Frequency = f, NetIdHash = new byte[8] }));
-            var data = new PresenceUpdatePacket { Counts = PresenceCounter.Build(subscriptions) }.Encode();
+            var data = new PresenceUpdatePacket
+            {
+                Counts = PresenceCounter.Build(subscriptions),
+                TotalUserCount = _clients.Count
+            }.Encode();
 
             foreach (var client in _clients.Values)
             {

@@ -32,6 +32,8 @@ public class RelayServerPresenceTests
 
             Assert.Contains(alphaPresence.Counts, c => c.Matches(251.000f, key) && c.UserCount == 2);
             Assert.Contains(bravoPresence.Counts, c => c.Matches(251.000f, key) && c.UserCount == 2);
+            Assert.Equal(2, alphaPresence.TotalUserCount);
+            Assert.Equal(2, bravoPresence.TotalUserCount);
         }
         finally
         {

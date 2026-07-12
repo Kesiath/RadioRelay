@@ -132,6 +132,7 @@ namespace RadioRelay.Client
         private readonly ModernButton _connectButton = new() { Text = "Connect", Emphasized = true, BackColor = Theme.AccentBlue, ForeColor = Color.White };
         private readonly TextBox _callsignBox = new() { Text = "", MaxLength = 20 };
         private readonly Label _statusLabel = new() { Text = "Disconnected", AutoSize = true, ForeColor = Theme.AccentRed };
+        private readonly Label _serverUserCountLabel = new() { Text = "0 users", AutoSize = true, ForeColor = Theme.MutedText };
         private readonly Label _versionLabel = new() { Text = ApplicationVersion.DisplayName, AutoSize = true, ForeColor = Theme.MutedText };
         private readonly NumericTextBox _pttReleaseDelayBox = new() { Minimum = 0, Maximum = 2000, Value = 200, Width = 70 };
 
@@ -747,33 +748,43 @@ namespace RadioRelay.Client
             NumericTextBox portBox,
             TextBox passwordBox,
             Button connectButton,
+            Label serverUserCountLabel,
             Label statusLabel,
             Label versionLabel)
         {
             var row = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 10,
+                ColumnCount = 12,
                 RowCount = 1,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 144));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 100));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 130));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
             connectButton.Width = 110;
             connectButton.Height = 32;
             connectButton.Margin = new Padding(0, FieldCaptionHeight, 0, 0);
             connectButton.Dock = DockStyle.Fill;
+
+            serverUserCountLabel.AutoSize = false;
+            serverUserCountLabel.Font = Theme.SmallMonoFont;
+            serverUserCountLabel.TextAlign = ContentAlignment.MiddleLeft;
+            serverUserCountLabel.AutoEllipsis = true;
+            serverUserCountLabel.Margin = new Padding(0, FieldCaptionHeight, 0, 0);
+            serverUserCountLabel.Dock = DockStyle.Fill;
 
             statusLabel.AutoSize = false;
             statusLabel.Font = Theme.SmallMonoFont;
@@ -789,12 +800,13 @@ namespace RadioRelay.Client
             versionLabel.Margin = new Padding(Gap, FieldCaptionHeight, 0, 0);
             versionLabel.Dock = DockStyle.Fill;
 
-            row.Controls.Add(CreateCompactField("Server", serverBox, 144), 0, 0);
+            row.Controls.Add(CreateCompactField("Server", serverBox, 140), 0, 0);
             row.Controls.Add(CreateCompactField("Port", portBox, 72), 2, 0);
-            row.Controls.Add(CreateCompactField("Password", passwordBox, 100), 4, 0);
+            row.Controls.Add(CreateCompactField("Password", passwordBox, 96), 4, 0);
             row.Controls.Add(connectButton, 6, 0);
-            row.Controls.Add(statusLabel, 8, 0);
-            row.Controls.Add(versionLabel, 9, 0);
+            row.Controls.Add(serverUserCountLabel, 8, 0);
+            row.Controls.Add(statusLabel, 10, 0);
+            row.Controls.Add(versionLabel, 11, 0);
             return row;
         }
 
@@ -1237,7 +1249,7 @@ namespace RadioRelay.Client
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             topCard.Controls.Add(CreateSectionHeader("Settings", "server / identity / devices"), 0, 0);
-            topCard.Controls.Add(CreateServerRow(_serverBox, _portBox, _serverPasswordBox, _connectButton, _statusLabel, _versionLabel), 0, 1);
+            topCard.Controls.Add(CreateServerRow(_serverBox, _portBox, _serverPasswordBox, _connectButton, _serverUserCountLabel, _statusLabel, _versionLabel), 0, 1);
             topCard.Controls.Add(CreateDeviceRow(_callsignBox, _inputDeviceBox, _outputDeviceBox), 0, 2);
             topCard.Controls.Add(CreateTopSliderPairRow(_inputGainSlider, _inputClickVolSlider, "Input gain", "TX click"), 0, 3);
             topCard.Controls.Add(CreateTopSliderPairRow(_outputClickVolSlider, _talkOverVolSlider, "RX click", "Talkover"), 0, 4);
@@ -1298,13 +1310,11 @@ namespace RadioRelay.Client
                 {
                     Minimum = 0,
                     Maximum = 100,
-                    Value = Math.Clamp((int)Math.Round(ch.Volume * 100), 0, 100),
-                    AccentColor = ch.HudColor
+                    Value = Math.Clamp((int)Math.Round(ch.Volume * 100), 0, 100)
                 };
                 var volValue = CreateLabel($"{vol.Value}%", muted: true);
                 volValue.Font = Theme.SmallMonoFont;
                 StyleSlider(vol);
-                vol.AccentColor = ch.HudColor;
 
                 var ear = new DarkComboBox { Width = 96, DropDownWidth = 112 };
                 StyleField(ear);
@@ -1518,12 +1528,13 @@ namespace RadioRelay.Client
 
                 localRow.ColorButton.Click += (_, _) =>
                 {
+                    ExitHudCustomizationMode();
                     using var dialog = new ColorDialog { Color = localRow.Channel.HudColor, FullOpen = true };
-                    if (dialog.ShowDialog() == DialogResult.OK)
+                    if (dialog.ShowDialog(this) == DialogResult.OK)
                     {
                         localRow.Channel.HudColor = dialog.Color;
                         localRow.ColorButton.BackColor = dialog.Color;
-                        localRow.Vol.AccentColor = dialog.Color;
+                        SaveCurrentSettings();
                     }
                 };
             }
@@ -1571,10 +1582,16 @@ namespace RadioRelay.Client
 
             _hudLayoutButton.Click += (_, _) =>
             {
-                _hudEditMode = !_hudEditMode;
-                _overlay.SetEditMode(_hudEditMode);
-                _hudLayoutButton.Text = _hudEditMode ? "Done HUD" : "Customize HUD";
-                if (!_hudEditMode) SaveCurrentSettings();
+                if (_hudEditMode)
+                {
+                    ExitHudCustomizationMode();
+                }
+                else
+                {
+                    _hudEditMode = true;
+                    _overlay.SetEditMode(true);
+                    _hudLayoutButton.Text = "Done HUD";
+                }
             };
             _overlay.LayoutChanged += SaveCurrentSettings;
 
@@ -1594,6 +1611,15 @@ namespace RadioRelay.Client
             // than lazily on first show) so BeginInvoke from background
             // threads works correctly from the very first transmission.
             _ = _overlay.Handle;
+        }
+
+        private void ExitHudCustomizationMode()
+        {
+            if (!_hudEditMode) return;
+            _hudEditMode = false;
+            _overlay.SetEditMode(false);
+            _hudLayoutButton.Text = "Customize HUD";
+            SaveCurrentSettings();
         }
 
         private void OnTransmissionStarted(TransmissionEventArgs e)
@@ -2022,6 +2048,7 @@ namespace RadioRelay.Client
                 _relayClient.StatusChanged += LogSafe;
                 _relayClient.AudioReceived += packet => _audioEngine?.OnAudioReceived(packet);
                 _relayClient.PresenceUpdated += OnPresenceUpdated;
+                _relayClient.TotalUserCountUpdated += OnTotalUserCountUpdated;
                 _relayClient.ConnectionHealthChanged += OnConnectionHealthChanged;
 
                 try
@@ -2048,6 +2075,7 @@ namespace RadioRelay.Client
                 _statusLabel.ForeColor = Theme.AccentRed;
                 _connectButton.Text = "Connect";
                 OnPresenceUpdated(Array.Empty<PresenceChannelCount>());
+                OnTotalUserCountUpdated(0);
                 if (hadEstablishedConnection) _audioEngine?.PlayDisconnectedBeep();
             }
         }
@@ -2063,6 +2091,14 @@ namespace RadioRelay.Client
                 row.UserCountLabel.ForeColor = count > 0 ? Theme.AccentGreen : Theme.MutedText;
                 _overlay.SetUserCount(row.Channel, count);
             }
+        }
+
+        private void OnTotalUserCountUpdated(int count)
+        {
+            if (InvokeRequired) { PostToUi(() => OnTotalUserCountUpdated(count)); return; }
+            var safeCount = Math.Max(0, count);
+            _serverUserCountLabel.Text = safeCount == 1 ? "1 user" : $"{safeCount} users";
+            _serverUserCountLabel.ForeColor = safeCount > 0 ? Theme.AccentGreen : Theme.MutedText;
         }
 
         private void OnConnectionHealthChanged(bool healthy)
