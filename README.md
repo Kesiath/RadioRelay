@@ -121,17 +121,11 @@ A radio can be configured with:
 
 ### Frequencies
 
-The server routes voice by frequency. If two users are not on the same frequency, their audio is not relayed to each other for that radio.
-
-Frequency matching allows a small tolerance so normal decimal entry differences do not break routing.
+The server routes voice by frequency. If two users are not on the same frequency, their audio is not relayed to each other for that radio. Frequency matching allows a small tolerance so normal decimal entry differences do not break routing.
 
 ### Passcodes and encrypted nets
 
-A blank passcode means the radio is open/unencrypted.
-
-A non-blank passcode creates a private encrypted radio net. Only clients using the same passcode on the same frequency can decrypt and hear that traffic.
-
-Per-radio passcodes are not sent to the server. The server only sees frequency and a short derived net identifier used for routing/presence. Actual voice payload encryption is handled client-side with AES-256-GCM.
+A blank passcode means the radio is open/unencrypted. A non-blank passcode creates a private encrypted radio net. Only clients using the same passcode on the same frequency can decrypt and hear that traffic. Per-radio passcodes are not sent to the server. The server only sees frequency and a short derived net identifier used for routing/presence. Actual voice payload encryption is handled client-side with AES-256-GCM.
 
 ### PTT bindings
 
@@ -140,9 +134,7 @@ Each radio supports two independent PTT slots:
 - PTT A
 - PTT B
 
-Either binding can key the radio. This allows setups such as a HOTAS button plus a keyboard fallback. Holding both at once still counts as one active transmission; releasing one while the other is still held does not end the transmission.
-
-PTT bindings can use supported keyboard, mouse, joystick, HOTAS, or gamepad input.
+Either binding can key the radio. This allows setups such as a HOTAS button plus a keyboard fallback. Holding both at once still counts as one active transmission; releasing one while the other is still held does not end the transmission. PTT bindings can use supported keyboard, mouse, joystick, HOTAS, or gamepad input.
 
 ### Audio controls
 
@@ -186,88 +178,6 @@ The export/import feature is designed for operational radio settings, including:
 - Radio passcodes
 
 It intentionally does not have to replace every local preference, such as personal device choices or HUD placement.
-
-## Server usage
-
-### Launch examples
-
-Default port:
-
-```bash
-dotnet run --project Server/RadioRelay.Server.csproj
-```
-
-Specific port:
-
-```bash
-dotnet run --project Server/RadioRelay.Server.csproj -- 2302
-```
-
-Specific port and password:
-
-```bash
-dotnet run --project Server/RadioRelay.Server.csproj -- 2302 myServerPassword
-```
-
-Password with default port:
-
-```bash
-dotnet run --project Server/RadioRelay.Server.csproj -- myServerPassword
-```
-
-### Admin commands
-
-| Command | Description |
-| --- | --- |
-| `help` | Show available commands. |
-| `clients` | List connected clients, callsigns, endpoints, frequencies, net hashes, and last-seen age. |
-| `stats` | Show connected client count, ban count, uptime, received datagrams, relayed datagrams, and dropped datagrams. |
-| `kick <client-id\|callsign\|ip>` | Disconnect a matching client. |
-| `ban <ip>` | Ban an IP address and disconnect matching clients. |
-| `unban <ip>` | Remove an IP address from the banlist. |
-| `banlist` | List banned IP addresses. |
-| `quit` | Stop the server. |
-
-The server persists its banlist under:
-
-```text
-%AppData%\RadioRelay\server-banlist.txt
-```
-
-On non-Windows systems, the exact base path is determined by .NET's application data folder behavior for the current user.
-
-## Network model
-
-RadioRelay uses UDP.
-
-The server is intentionally simple: it does not decode voice and does not need to know radio passcodes. Clients subscribe to frequencies, send Opus-compressed audio frames, and the server forwards matching packets to subscribed clients.
-
-Packet types include:
-
-- Subscribe
-- Audio
-- Heartbeat
-- Heartbeat ACK
-- Disconnect
-- Presence update
-
-The client uses heartbeat ACKs to determine whether the connection is actually healthy. UDP send success alone does not prove that the server received a packet.
-
-## Security model
-
-RadioRelay has two separate password concepts:
-
-### Server password
-
-The server password controls whether a client is allowed to join a specific server.
-
-This is an access-control password, not a radio encryption key.
-
-### Radio passcodes
-
-Radio passcodes are per-radio net keys. They are used to derive encryption material for voice packets. Matching passcodes are required to decrypt encrypted transmissions.
-
-Radio passcodes are stored locally in the user's settings file. Treat exported settings files as sensitive if they include operational passcodes.
 
 ## License
 
