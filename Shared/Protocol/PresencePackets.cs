@@ -38,6 +38,7 @@ namespace RadioRelay.Shared.Protocol
         public float Frequency { get; init; }
         public byte[] NetIdHash { get; init; }
         public int UserCount { get; init; }
+        public string[] ClientNames { get; init; }
 
         public bool Matches(float frequency, byte[] netIdHash) =>
             Math.Abs(Frequency - frequency) <= PresenceSubscription.FrequencyTolerance &&
@@ -82,6 +83,7 @@ namespace RadioRelay.Shared.Protocol
     {
         public PresenceChannelCount[] Counts = Array.Empty<PresenceChannelCount>();
         public int TotalUserCount;
+        public string[] ConnectedClientNames = Array.Empty<string>();
 
         public byte[] Encode()
         {
@@ -96,6 +98,18 @@ namespace RadioRelay.Shared.Protocol
                 w.Write((ushort)Math.Clamp(count.UserCount, 0, ushort.MaxValue));
             }
             w.Write((ushort)Math.Clamp(TotalUserCount, 0, ushort.MaxValue));
+            w.Write((ushort)Math.Clamp(ConnectedClientNames.Length, 0, ushort.MaxValue));
+            foreach (var name in ConnectedClientNames.Take(ushort.MaxValue))
+                WireString.Write(w, name);
+            // Appended membership detail keeps older clients compatible: they
+            // stop after TotalUserCount and simply ignore this trailing data.
+            w.Write((ushort)Math.Clamp(Counts.Length, 0, ushort.MaxValue));
+            foreach (var count in Counts.Take(ushort.MaxValue))
+            {
+                var names = count.ClientNames ?? Array.Empty<string>();
+                w.Write((ushort)Math.Clamp(names.Length, 0, ushort.MaxValue));
+                foreach (var name in names.Take(ushort.MaxValue)) WireString.Write(w, name);
+            }
             return ms.ToArray();
         }
 
@@ -117,6 +131,37 @@ namespace RadioRelay.Shared.Protocol
             }
             if (ms.Position + sizeof(ushort) <= ms.Length)
                 packet.TotalUserCount = r.ReadUInt16();
+            if (ms.Position + sizeof(ushort) <= ms.Length)
+            {
+                ushort nameCount = r.ReadUInt16();
+                var names = new List<string>(nameCount);
+                for (int i = 0; i < nameCount && ms.Position < ms.Length; i++)
+                    names.Add(WireString.Read(r));
+                packet.ConnectedClientNames = names.ToArray();
+            }
+            if (ms.Position + sizeof(ushort) <= ms.Length)
+            {
+                ushort membershipCount = r.ReadUInt16();
+                for (int i = 0; i < membershipCount && ms.Position + sizeof(ushort) <= ms.Length; i++)
+                {
+                    ushort nameCount = r.ReadUInt16();
+                    var names = new List<string>(nameCount);
+                    for (int j = 0; j < nameCount && ms.Position < ms.Length; j++)
+                        names.Add(WireString.Read(r));
+
+                    if (i < packet.Counts.Length)
+                    {
+                        var existing = packet.Counts[i];
+                        packet.Counts[i] = new PresenceChannelCount
+                        {
+                            Frequency = existing.Frequency,
+                            NetIdHash = existing.NetIdHash,
+                            UserCount = existing.UserCount,
+                            ClientNames = names.ToArray()
+                        };
+                    }
+                }
+            }
             return packet;
         }
     }

@@ -20,6 +20,7 @@ namespace RadioRelay.Client
         {
             public required RadioChannel Channel;
             public required TextBox NameBox;
+            public required DarkComboBox ChannelBox;
             public required NumericTextBox Freq;
             public required ModernSlider Vol;
             public required DarkComboBox Ear;
@@ -34,6 +35,7 @@ namespace RadioRelay.Client
             public required Label StatusBadge;
             public required Label VolumeValueLabel;
             public required Label EncryptStateLabel;
+            public bool ApplyingPreset;
         }
 
         private sealed class DarkInputHost : Panel
@@ -118,6 +120,7 @@ namespace RadioRelay.Client
         private int _pttReleaseDelayMs = 200;
 
         private readonly TransmissionOverlayForm _overlay;
+        private readonly IcpOverlayForm _icpOverlay;
         private readonly Guid _identity = Guid.NewGuid();
         private bool _hudEditMode;
         private bool _connectionEstablished;
@@ -133,6 +136,7 @@ namespace RadioRelay.Client
         private readonly TextBox _callsignBox = new() { Text = "", MaxLength = 20 };
         private readonly Label _statusLabel = new() { Text = "Disconnected", AutoSize = true, ForeColor = Theme.AccentRed };
         private readonly Label _serverUserCountLabel = new() { Text = "0 users", AutoSize = true, ForeColor = Theme.MutedText };
+        private readonly MembershipToolTip _membershipToolTip = new();
         private readonly Label _versionLabel = new() { Text = ApplicationVersion.DisplayName, AutoSize = true, ForeColor = Theme.MutedText };
         private readonly NumericTextBox _pttReleaseDelayBox = new() { Minimum = 0, Maximum = 2000, Value = 200, Width = 70 };
 
@@ -144,6 +148,7 @@ namespace RadioRelay.Client
         private readonly ModernSlider _outputClickVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
 
         private readonly ModernButton _hudLayoutButton = new() { Text = "Customize HUD" };
+        private readonly ModernButton _icpBindingButton = new() { Text = "ICP Unbound" };
         private readonly ModernButton _controlLockButton = new() { Text = "Lock Controls" };
         private readonly ModernButton _exportSettingsButton = new() { Text = "Export Settings" };
         private readonly ModernButton _importSettingsButton = new() { Text = "Import Settings" };
@@ -188,6 +193,7 @@ namespace RadioRelay.Client
             _settings = AppSettings.Load();
             _channels = BuildChannelsFromSettings();
             _overlay = new TransmissionOverlayForm(_channels);
+            _icpOverlay = new IcpOverlayForm(_channels);
 
             Text = ApplicationVersion.DisplayName;
             TitleBar.Title = "RadioRelay";
@@ -204,6 +210,7 @@ namespace RadioRelay.Client
             AutoScroll = false;
             Font = Theme.BodyFont;
             DoubleBuffered = true;
+            KeyPreview = true;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, true);
 
             ContentHost.Controls.Add(_scrollHost);
@@ -217,9 +224,9 @@ namespace RadioRelay.Client
         {
             var defaults = new List<RadioChannel>
             {
-                new RadioChannel { Name = "RADIO 1", Frequency = 251.000f, HudColor = Color.FromArgb(90, 160, 235) },
-                new RadioChannel { Name = "RADIO 2", Frequency = 305.000f, HudColor = Color.FromArgb(180, 120, 235) },
-                new RadioChannel { Name = "RADIO 3", Frequency = 100.000f, HudColor = Color.FromArgb(90, 210, 170) }
+                CreateDefaultRadio("RADIO 1", 251.000f, Color.FromArgb(90, 160, 235)),
+                CreateDefaultRadio("RADIO 2", 305.000f, Color.FromArgb(180, 120, 235)),
+                CreateDefaultRadio("RADIO 3", 100.000f, Color.FromArgb(90, 210, 170))
             };
 
             foreach (var ch in defaults)
@@ -227,6 +234,13 @@ namespace RadioRelay.Client
                 ApplySavedRadioSettings(ch);
             }
             return defaults;
+        }
+
+        private static RadioChannel CreateDefaultRadio(string name, float frequency, Color hudColor)
+        {
+            var channel = new RadioChannel { Name = name, HudColor = hudColor };
+            channel.ConfigurePresets(frequency);
+            return channel;
         }
 
         private void ApplySavedRadioSettings(RadioChannel ch)
@@ -239,10 +253,19 @@ namespace RadioRelay.Client
                 ?? (ch.Name == "RADIO 3" ? _settings.Radios.Find(r => r.Name == "INTERCOM") : null);
             if (saved == null) return;
             ch.LocalName = saved.LocalName;
-            ch.Frequency = Math.Clamp(saved.Frequency, 2f, 999f);
+            ch.ConfigurePresets(
+                ch.DefaultFrequency,
+                saved.SelectedChannel,
+                (saved.Channels ?? new List<RadioPresetSettings>()).Select(channel => new RadioPreset
+                {
+                    Channel = channel.Channel,
+                    Frequency = channel.Frequency,
+                    Passcode = channel.Passcode
+                }),
+                legacyFrequency: saved.Frequency,
+                legacyPasscode: saved.Passcode);
             ch.Volume = Math.Clamp(saved.Volume, 0f, 1f);
             ch.Ear = saved.Ear;
-            ch.Passcode = saved.Passcode;
             ch.HudColor = Color.FromArgb(saved.HudColorArgb);
             if (saved.HudX.HasValue && saved.HudY.HasValue)
                 ch.HudPosition = new Point(saved.HudX.Value, saved.HudY.Value);
@@ -887,13 +910,14 @@ namespace RadioRelay.Client
 
         private static TableLayoutPanel CreateToolbarRows(
             NumericTextBox pttReleaseDelayBox,
+            Button icpBindingButton,
             Button controlLockButton,
             Button hudLayoutButton,
             Button exportSettingsButton,
             Button importSettingsButton)
         {
             const int buttonHeight = 32;
-            foreach (var button in new[] { controlLockButton, hudLayoutButton, exportSettingsButton, importSettingsButton })
+            foreach (var button in new[] { icpBindingButton, controlLockButton, hudLayoutButton, exportSettingsButton, importSettingsButton })
             {
                 button.Height = buttonHeight;
                 button.Dock = DockStyle.Fill;
@@ -903,7 +927,7 @@ namespace RadioRelay.Client
             var row = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 9,
+                ColumnCount = 11,
                 RowCount = 1,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
@@ -911,19 +935,22 @@ namespace RadioRelay.Client
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 20));
 
             row.Controls.Add(CreateCompactField("PTT ms", pttReleaseDelayBox, 86), 0, 0);
-            row.Controls.Add(controlLockButton, 2, 0);
-            row.Controls.Add(hudLayoutButton, 4, 0);
-            row.Controls.Add(exportSettingsButton, 6, 0);
-            row.Controls.Add(importSettingsButton, 8, 0);
+            row.Controls.Add(icpBindingButton, 2, 0);
+            row.Controls.Add(controlLockButton, 4, 0);
+            row.Controls.Add(hudLayoutButton, 6, 0);
+            row.Controls.Add(exportSettingsButton, 8, 0);
+            row.Controls.Add(importSettingsButton, 10, 0);
             return row;
         }
 
@@ -1083,6 +1110,7 @@ namespace RadioRelay.Client
         }
 
         private static TableLayoutPanel CreatePttRow(
+            DarkComboBox channelBox,
             Label pttPrimaryLabel,
             Button pttPrimaryButton,
             Label pttSecondaryLabel,
@@ -1091,15 +1119,17 @@ namespace RadioRelay.Client
             // The PTT A / PTT B captions are the clickable capture buttons
             // now, which removes the separate Set buttons and keeps each
             // binding row compact without changing the event wiring.
-            const int pttRowHeight = 34;
+            const int pttRowHeight = 46;
             var row = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 5,
+                ColumnCount = 7,
                 RowCount = 1,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap + 8));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 74));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap + 8));
@@ -1113,7 +1143,7 @@ namespace RadioRelay.Client
             {
                 button.Dock = DockStyle.Fill;
                 button.Height = 30;
-                button.Margin = new Padding(0, 2, 0, 2);
+                button.Margin = new Padding(0, FieldCaptionHeight, 0, 0);
                 button.TextAlign = ContentAlignment.MiddleCenter;
             }
 
@@ -1124,14 +1154,16 @@ namespace RadioRelay.Client
                 label.Dock = DockStyle.Fill;
                 label.TextAlign = ContentAlignment.MiddleLeft;
                 label.AutoEllipsis = true;
-                label.Margin = new Padding(8, 0, 6, 0);
+                label.Margin = new Padding(8, FieldCaptionHeight, 6, 0);
             }
 
-            row.Controls.Add(pttPrimaryButton, 0, 0);
-            row.Controls.Add(pttPrimaryLabel, 1, 0);
-            row.Controls.Add(new Panel { Dock = DockStyle.Fill }, 2, 0);
-            row.Controls.Add(pttSecondaryButton, 3, 0);
-            row.Controls.Add(pttSecondaryLabel, 4, 0);
+            row.Controls.Add(CreateCompactField("Channel", channelBox, 86), 0, 0);
+            row.Controls.Add(new Panel { Dock = DockStyle.Fill }, 1, 0);
+            row.Controls.Add(pttPrimaryButton, 2, 0);
+            row.Controls.Add(pttPrimaryLabel, 3, 0);
+            row.Controls.Add(new Panel { Dock = DockStyle.Fill }, 4, 0);
+            row.Controls.Add(pttSecondaryButton, 5, 0);
+            row.Controls.Add(pttSecondaryLabel, 6, 0);
             return row;
         }
 
@@ -1223,6 +1255,7 @@ namespace RadioRelay.Client
             StyleField(_outputDeviceBox);
             _hudLayoutButton.Text = "Customize HUD";
             StyleButton(_hudLayoutButton);
+            StyleButton(_icpBindingButton);
             StyleButton(_controlLockButton);
             StyleButton(_exportSettingsButton);
             StyleButton(_importSettingsButton);
@@ -1271,8 +1304,8 @@ namespace RadioRelay.Client
             };
             toolbar.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             toolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            toolbar.Controls.Add(CreateSectionHeader("Controls", "PTT / HUD / profile"), 0, 0);
-            toolbar.Controls.Add(CreateToolbarRows(_pttReleaseDelayBox, _controlLockButton, _hudLayoutButton, _exportSettingsButton, _importSettingsButton), 0, 1);
+            toolbar.Controls.Add(CreateSectionHeader("Controls", "PTT / ICP / HUD / profile"), 0, 0);
+            toolbar.Controls.Add(CreateToolbarRows(_pttReleaseDelayBox, _icpBindingButton, _controlLockButton, _hudLayoutButton, _exportSettingsButton, _importSettingsButton), 0, 1);
             AddPageRow(toolbar, 10);
 
             foreach (var ch in _channels)
@@ -1307,6 +1340,12 @@ namespace RadioRelay.Client
                     Value = (decimal)Math.Clamp(ch.Frequency, 2f, 999f)
                 };
                 StyleField(freq);
+
+                var channelBox = new DarkComboBox { Width = 86, DropDownWidth = 86 };
+                StyleField(channelBox);
+                for (var channelNumber = 1; channelNumber <= RadioChannel.PresetCount; channelNumber++)
+                    channelBox.Items.Add(channelNumber);
+                channelBox.SelectedItem = ch.SelectedChannel;
 
                 var vol = new ModernSlider
                 {
@@ -1361,12 +1400,13 @@ namespace RadioRelay.Client
                 var pttSecondaryLabel = CreateLabel("Unbound", muted: true);
                 pttSecondaryLabel.AutoSize = false;
 
-                body.Controls.Add(CreatePttRow(pttPrimaryLabel, pttPrimaryButton, pttSecondaryLabel, pttSecondaryButton), 0, 2);
+                body.Controls.Add(CreatePttRow(channelBox, pttPrimaryLabel, pttPrimaryButton, pttSecondaryLabel, pttSecondaryButton), 0, 2);
 
                 _radioRows.Add(new RadioRow
                 {
                     Channel = ch,
                     NameBox = nameBox,
+                    ChannelBox = channelBox,
                     Freq = freq,
                     Vol = vol,
                     Ear = ear,
@@ -1519,12 +1559,19 @@ namespace RadioRelay.Client
                     localRow.Channel.LocalName = localRow.NameBox.Text;
                     FitRadioNameFont(localRow.NameBox);
                     _overlay.Invalidate();
+                    _icpOverlay.RefreshRadioNames();
                 };
 
                 localRow.Freq.ValueChanged += (_, _) =>
                 {
-                    localRow.Channel.Frequency = (float)localRow.Freq.Value;
+                    if (localRow.ApplyingPreset) return;
+                    localRow.Channel.SetActiveFrequency((float)localRow.Freq.Value);
                     ResubscribeIfConnected();
+                };
+                localRow.ChannelBox.SelectedIndexChanged += (_, _) =>
+                {
+                    if (localRow.ApplyingPreset || localRow.ChannelBox.SelectedItem is not int channelNumber) return;
+                    ApplyRadioChannelSelection(localRow, channelNumber);
                 };
                 localRow.Vol.ValueChanged += (_, _) =>
                 {
@@ -1549,7 +1596,8 @@ namespace RadioRelay.Client
                 };
                 localRow.Passcode.TextChanged += (_, _) =>
                 {
-                    localRow.Channel.Passcode = localRow.Passcode.Text;
+                    if (localRow.ApplyingPreset) return;
+                    localRow.Channel.SetActivePasscode(localRow.Passcode.Text);
                     UpdateEncryptState(localRow);
                     ResubscribeIfConnected();
                 };
@@ -1612,6 +1660,7 @@ namespace RadioRelay.Client
                 ApplyControlLock();
                 SaveCurrentSettings();
             };
+            _icpBindingButton.Click += (_, _) => StartIcpToggleCapture();
 
             _hudLayoutButton.Click += (_, _) =>
             {
@@ -1623,10 +1672,22 @@ namespace RadioRelay.Client
                 {
                     _hudEditMode = true;
                     _overlay.SetEditMode(true);
+                    _icpOverlay.SetEditMode(true);
                     _hudLayoutButton.Text = "Done HUD";
                 }
             };
             _overlay.LayoutChanged += SaveCurrentSettings;
+            _icpOverlay.LayoutChanged += SaveCurrentSettings;
+            _icpOverlay.EscapeRequested += ExitHudCustomizationMode;
+            _icpOverlay.ChangeConfirmed += (channel, selectedChannel, volume) =>
+            {
+                var row = _radioRows.Find(candidate => ReferenceEquals(candidate.Channel, channel));
+                if (row == null) return;
+                if (selectedChannel.HasValue)
+                    ApplyRadioChannelSelection(row, selectedChannel.Value);
+                row.Vol.Value = Math.Clamp(volume, row.Vol.Minimum, row.Vol.Maximum);
+                SaveCurrentSettings();
+            };
 
             _exportSettingsButton.Click += (_, _) => ExportSettings();
             _importSettingsButton.Click += (_, _) => ImportSettings();
@@ -1634,6 +1695,8 @@ namespace RadioRelay.Client
             _pttInput.Start();
             _pttInput.PttDown += OnPttDown;
             _pttInput.PttUp += OnPttUp;
+            _pttInput.IcpTogglePressed += () => PostToUi(_icpOverlay.ToggleOverlay);
+            _pttInput.EscapePressed += () => PostToUi(HandleGlobalEscape);
 
             _audioEngine = new AudioEngine(_channels) { Callsign = _callsignBox.Text };
             _audioEngine.AudioCaptured += (_, e) => _relayClient?.SendAudio(e.Packet);
@@ -1644,6 +1707,7 @@ namespace RadioRelay.Client
             // than lazily on first show) so BeginInvoke from background
             // threads works correctly from the very first transmission.
             _ = _overlay.Handle;
+            _ = _icpOverlay.Handle;
         }
 
         private void ExitHudCustomizationMode()
@@ -1651,6 +1715,7 @@ namespace RadioRelay.Client
             if (!_hudEditMode) return;
             _hudEditMode = false;
             _overlay.SetEditMode(false);
+            _icpOverlay.SetEditMode(false);
             _hudLayoutButton.Text = "Customize HUD";
             SaveCurrentSettings();
         }
@@ -1730,6 +1795,7 @@ namespace RadioRelay.Client
             _callsignBox.Text = _settings.Callsign;
             if (_audioEngine != null) _audioEngine.Callsign = _settings.Callsign;
             _controlLockEnabled = _settings.ControlLockEnabled;
+            _icpOverlay.SetSavedPosition(_settings.IcpX, _settings.IcpY);
             ApplyControlLock();
 
             if (_settings.PttReleaseDelayMs >= (int)_pttReleaseDelayBox.Minimum &&
@@ -1763,10 +1829,12 @@ namespace RadioRelay.Client
             _controlLockButton.Text = state.ToggleButtonText;
             _controlLockButton.BackColor = state.IsLocked ? Theme.AccentOrange : Theme.FieldBackground;
             _controlLockButton.ForeColor = state.IsLocked ? Color.Black : Theme.Text;
+            _icpBindingButton.Enabled = state.CanChangePttBinding;
 
             foreach (var row in _radioRows)
             {
                 row.NameBox.Enabled = state.CanEditName;
+                row.ChannelBox.Enabled = state.CanEditFrequency;
                 row.Freq.Enabled = state.CanEditFrequency;
                 row.Passcode.Enabled = state.CanEditPasscode;
                 row.PttPrimaryButton.Enabled = state.CanChangePttBinding;
@@ -1785,6 +1853,8 @@ namespace RadioRelay.Client
 
         private void ApplySavedPttBindings()
         {
+            _pttInput.SetIcpToggleBinding(FromSlotSettings(_settings.IcpToggle));
+            UpdateIcpBindingButton(_pttInput.GetIcpToggleBinding());
             foreach (var row in _radioRows)
             {
                 SetPttLabelUnbound(row.PttPrimaryLabel);
@@ -1823,6 +1893,19 @@ namespace RadioRelay.Client
             label.ForeColor = Theme.AccentGreen;
         }
 
+        private static PttBinding? FromSlotSettings(PttSlotSettings? saved)
+        {
+            if (saved?.Type == null) return null;
+            return new PttBinding
+            {
+                Type = saved.Type.Value,
+                KeyCode = saved.KeyCode,
+                DeviceGuid = saved.DeviceGuid,
+                ButtonIndex = saved.ButtonIndex,
+                DisplayName = saved.DisplayName
+            };
+        }
+
         private void SaveCurrentSettings()
         {
             _settings.ServerIp = _serverBox.Text;
@@ -1831,6 +1914,9 @@ namespace RadioRelay.Client
             _settings.Callsign = _callsignBox.Text;
             _settings.PttReleaseDelayMs = _pttReleaseDelayMs;
             _settings.ControlLockEnabled = _controlLockEnabled;
+            _settings.IcpToggle = ToSlotSettings(_pttInput.GetIcpToggleBinding());
+            _settings.IcpX = _icpOverlay.Left;
+            _settings.IcpY = _icpOverlay.Top;
 
             _settings.InputDeviceIndex = _inputDeviceBox.SelectedItem is DeviceItem inItem ? inItem.Index : -1;
             _settings.OutputDeviceIndex = _outputDeviceBox.SelectedItem is DeviceItem outItem ? outItem.Index : -1;
@@ -1844,6 +1930,9 @@ namespace RadioRelay.Client
             {
                 var primary = _pttInput.GetBinding(row.Channel, PttSlot.Primary);
                 var secondary = _pttInput.GetBinding(row.Channel, PttSlot.Secondary);
+                row.Channel.SetActiveFrequency((float)row.Freq.Value);
+                row.Channel.SetActivePasscode(row.Passcode.Text);
+                var presets = row.Channel.GetPresetSnapshot();
 
                 _settings.Radios.Add(new RadioSettings
                 {
@@ -1853,6 +1942,13 @@ namespace RadioRelay.Client
                     Volume = row.Channel.Volume,
                     Ear = row.Channel.Ear,
                     Passcode = row.Channel.Passcode,
+                    SelectedChannel = row.Channel.SelectedChannel,
+                    Channels = presets.Select(preset => new RadioPresetSettings
+                    {
+                        Channel = preset.Channel,
+                        Frequency = preset.Frequency,
+                        Passcode = preset.Passcode
+                    }).ToList(),
                     HudColorArgb = row.Channel.HudColor.ToArgb(),
                     HudX = row.Channel.HudPosition?.X,
                     HudY = row.Channel.HudPosition?.Y,
@@ -1940,14 +2036,23 @@ namespace RadioRelay.Client
         {
             foreach (var row in _radioRows)
             {
-                row.NameBox.Text = row.Channel.DisplayName;
-                row.Freq.Value = (decimal)Math.Clamp(row.Channel.Frequency, (float)row.Freq.Minimum, (float)row.Freq.Maximum);
-                row.Vol.Value = Math.Clamp((int)Math.Round(row.Channel.Volume * 100), row.Vol.Minimum, row.Vol.Maximum);
-                row.VolumeValueLabel.Text = $"{row.Vol.Value}%";
-                row.Ear.SelectedItem = row.Channel.Ear;
-                row.Passcode.Text = row.Channel.Passcode;
-                UpdateEncryptState(row);
-                row.ColorButton.BackColor = row.Channel.HudColor;
+                row.ApplyingPreset = true;
+                try
+                {
+                    row.NameBox.Text = row.Channel.DisplayName;
+                    row.ChannelBox.SelectedItem = row.Channel.SelectedChannel;
+                    row.Freq.Value = (decimal)Math.Clamp(row.Channel.Frequency, (float)row.Freq.Minimum, (float)row.Freq.Maximum);
+                    row.Vol.Value = Math.Clamp((int)Math.Round(row.Channel.Volume * 100), row.Vol.Minimum, row.Vol.Maximum);
+                    row.VolumeValueLabel.Text = $"{row.Vol.Value}%";
+                    row.Ear.SelectedItem = row.Channel.Ear;
+                    row.Passcode.Text = row.Channel.Passcode;
+                    UpdateEncryptState(row);
+                    row.ColorButton.BackColor = row.Channel.HudColor;
+                }
+                finally
+                {
+                    row.ApplyingPreset = false;
+                }
                 _overlay.SetUserCount(row.Channel, 0);
                 if (row.Channel.Volume <= 0f) _overlay.SuppressChannel(row.Channel);
                 UpdateRadioActivity(row.Channel);
@@ -2025,6 +2130,93 @@ namespace RadioRelay.Client
             });
         }
 
+        private void StartIcpToggleCapture()
+        {
+            if (_controlLockEnabled)
+            {
+                LogSafe("Unlock controls before changing the ICP binding.");
+                return;
+            }
+
+            _icpBindingButton.Text = "ICP ...";
+            _icpBindingButton.Enabled = false;
+            _pttInput.StartIcpToggleCapture(binding =>
+            {
+                if (InvokeRequired) { PostToUi(() => ApplyCapturedIcpBinding(binding)); return; }
+                ApplyCapturedIcpBinding(binding);
+            });
+        }
+
+        private void ApplyCapturedIcpBinding(PttBinding? binding)
+        {
+            _icpBindingButton.Enabled = !_controlLockEnabled;
+            UpdateIcpBindingButton(binding);
+            LogSafe(binding == null ? "ICP toggle binding cleared." : $"ICP toggle bound to {binding.DisplayName}");
+            SaveCurrentSettings();
+        }
+
+        private void HandleGlobalEscape()
+        {
+            if (_hudEditMode)
+            {
+                ExitHudCustomizationMode();
+                return;
+            }
+
+            if (_icpOverlay.Visible)
+                _icpOverlay.HideAndReset();
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (_hudEditMode && keyData == Keys.Escape)
+            {
+                ExitHudCustomizationMode();
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
+        }
+
+        private void UpdateIcpBindingButton(PttBinding? binding)
+        {
+            _icpBindingButton.Text = binding == null
+                ? "ICP Unbound"
+                : $"ICP: {CompactIcpBindingName(binding)}";
+            _icpBindingButton.BackColor = binding == null ? Theme.FieldBackground : Theme.TealDim;
+        }
+
+        internal static string CompactIcpBindingName(PttBinding binding) => binding.Type switch
+        {
+            PttBindingType.Keyboard => $"Key {(Keys)binding.KeyCode}",
+            PttBindingType.MouseButton => $"Mouse {binding.ButtonIndex + 3}",
+            PttBindingType.JoystickButton => $"Joy {binding.ButtonIndex + 1}",
+            _ => CompactPttDisplayName(binding.DisplayName)
+        };
+
+        private void ApplyRadioChannelSelection(RadioRow row, int channelNumber)
+        {
+            row.ApplyingPreset = true;
+            try
+            {
+                row.Channel.SelectChannel(channelNumber);
+                row.ChannelBox.SelectedItem = channelNumber;
+                row.Freq.Value = (decimal)Math.Clamp(row.Channel.Frequency, (float)row.Freq.Minimum, (float)row.Freq.Maximum);
+                row.Passcode.Text = row.Channel.Passcode;
+                UpdateEncryptState(row);
+            }
+            finally
+            {
+                row.ApplyingPreset = false;
+            }
+
+            row.UserCountLabel.Text = PresenceDisplay.FormatCount(0);
+            row.UserCountLabel.ForeColor = Theme.MutedText;
+            _overlay.SetUserCount(row.Channel, 0);
+            _overlay.Invalidate();
+            ResubscribeIfConnected();
+            SaveCurrentSettings();
+        }
+
         private void ApplyCapturedBinding(
             RadioChannel channel,
             PttBinding? binding,
@@ -2082,6 +2274,7 @@ namespace RadioRelay.Client
                 _relayClient.AudioReceived += packet => _audioEngine?.OnAudioReceived(packet);
                 _relayClient.PresenceUpdated += OnPresenceUpdated;
                 _relayClient.TotalUserCountUpdated += OnTotalUserCountUpdated;
+                _relayClient.ConnectedClientNamesUpdated += OnConnectedClientNamesUpdated;
                 _relayClient.ConnectionHealthChanged += OnConnectionHealthChanged;
 
                 try
@@ -2109,6 +2302,7 @@ namespace RadioRelay.Client
                 _connectButton.Text = "Connect";
                 OnPresenceUpdated(Array.Empty<PresenceChannelCount>());
                 OnTotalUserCountUpdated(0);
+                OnConnectedClientNamesUpdated(Array.Empty<string>());
                 if (hadEstablishedConnection) _audioEngine?.PlayDisconnectedBeep();
             }
         }
@@ -2123,6 +2317,12 @@ namespace RadioRelay.Client
                 row.UserCountLabel.Text = PresenceDisplay.FormatCount(count);
                 row.UserCountLabel.ForeColor = count > 0 ? Theme.AccentGreen : Theme.MutedText;
                 _overlay.SetUserCount(row.Channel, count);
+                var membership = counts.FirstOrDefault(item =>
+                    item.Matches(row.Channel.Frequency, row.Channel.SelectedNet.NetIdHash));
+                _membershipToolTip.SetMembership(
+                    row.UserCountLabel,
+                    $"{row.Channel.DisplayName} Members",
+                    membership.ClientNames);
             }
         }
 
@@ -2132,6 +2332,21 @@ namespace RadioRelay.Client
             var safeCount = Math.Max(0, count);
             _serverUserCountLabel.Text = safeCount == 1 ? "1 user" : $"{safeCount} users";
             _serverUserCountLabel.ForeColor = safeCount > 0 ? Theme.AccentGreen : Theme.MutedText;
+        }
+
+        private void OnConnectedClientNamesUpdated(string[] names)
+        {
+            if (InvokeRequired) { PostToUi(() => OnConnectedClientNamesUpdated(names)); return; }
+
+            var sortedNames = (names ?? Array.Empty<string>())
+                .Select(name => string.IsNullOrWhiteSpace(name) ? "(no callsign)" : name.Trim())
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            _membershipToolTip.SetMembership(
+                _serverUserCountLabel,
+                "Server Members",
+                sortedNames);
         }
 
         private void OnConnectionHealthChanged(bool healthy)
@@ -2203,6 +2418,9 @@ namespace RadioRelay.Client
             _pttInput.Dispose();
             _overlay.Close();
             _overlay.Dispose();
+            _icpOverlay.Close();
+            _icpOverlay.Dispose();
+            _membershipToolTip.Dispose();
             base.OnFormClosed(e);
         }
 

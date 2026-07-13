@@ -454,15 +454,45 @@ namespace RadioRelay.Server
 
         private void BroadcastPresenceUpdate()
         {
-            var subscriptions = _clients.Values.SelectMany(client =>
+            var clients = _clients.Values.ToArray();
+            static PresenceSubscription[] SubscriptionsFor(ClientState client) =>
                 client.Subscriptions.Length > 0
                     ? client.Subscriptions
                     : Array.ConvertAll(client.Frequencies,
-                        f => new PresenceSubscription { Frequency = f, NetIdHash = new byte[8] }));
+                        frequency => new PresenceSubscription { Frequency = frequency, NetIdHash = new byte[8] });
+            static string DisplayCallsign(ClientState client) =>
+                string.IsNullOrWhiteSpace(client.Callsign) ? "(no callsign)" : client.Callsign.Trim();
+
+            var counts = PresenceCounter.Build(clients.SelectMany(SubscriptionsFor));
+            for (int i = 0; i < counts.Length; i++)
+            {
+                var count = counts[i];
+                var memberNames = clients
+                    .Where(client => SubscriptionsFor(client).Any(subscription =>
+                        subscription.Matches(count.Frequency, count.NetIdHash)))
+                    .Select(DisplayCallsign)
+                    .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(name => name, StringComparer.Ordinal)
+                    .ToArray();
+                counts[i] = new PresenceChannelCount
+                {
+                    Frequency = count.Frequency,
+                    NetIdHash = count.NetIdHash,
+                    // Count distinct connected clients, not subscriptions, so
+                    // one person tuning two radios identically appears once.
+                    UserCount = memberNames.Length,
+                    ClientNames = memberNames
+                };
+            }
             var data = new PresenceUpdatePacket
             {
-                Counts = PresenceCounter.Build(subscriptions),
-                TotalUserCount = _clients.Count
+                Counts = counts,
+                TotalUserCount = clients.Length,
+                ConnectedClientNames = clients
+                    .Select(DisplayCallsign)
+                    .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(name => name, StringComparer.Ordinal)
+                    .ToArray()
             }.Encode();
 
             foreach (var client in _clients.Values)

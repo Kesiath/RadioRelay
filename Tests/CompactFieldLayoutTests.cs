@@ -55,6 +55,7 @@ public class CompactFieldLayoutTests
     public void Toolbar_actions_share_remaining_width_and_align_with_the_input_row()
     {
         var delay = new NumericTextBox();
+        var icpButton = new ModernButton { Text = "ICP Unbound" };
         var lockButton = new ModernButton { Text = "Lock Controls" };
         var hudButton = new ModernButton { Text = "Customize HUD" };
         var exportButton = new ModernButton { Text = "Export Settings" };
@@ -63,16 +64,16 @@ public class CompactFieldLayoutTests
         Assert.NotNull(method);
         using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
             null,
-            new object[] { delay, lockButton, hudButton, exportButton, importButton }));
+            new object[] { delay, icpButton, lockButton, hudButton, exportButton, importButton }));
 
         row.Size = new Size(724, 48);
         row.CreateControl();
         row.PerformLayout();
 
-        Assert.Equal(9, row.ColumnCount);
-        foreach (var column in new[] { 2, 4, 6, 8 })
+        Assert.Equal(11, row.ColumnCount);
+        foreach (var column in new[] { 2, 4, 6, 8, 10 })
             Assert.Equal(SizeType.Percent, row.ColumnStyles[column].SizeType);
-        foreach (var button in new[] { lockButton, hudButton, exportButton, importButton })
+        foreach (var button in new[] { icpButton, lockButton, hudButton, exportButton, importButton })
         {
             Assert.Equal(16, button.Margin.Top);
             Assert.Equal(0, button.Margin.Bottom);
@@ -111,11 +112,17 @@ public class CompactFieldLayoutTests
     {
         var method = typeof(MainForm).GetMethod("CreateRadioHeaderRow", BindingFlags.Static | BindingFlags.NonPublic);
         Assert.NotNull(method);
+        var titleBox = new TextBox
+        {
+            Text = "RADIO 1",
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0, 10, 0, 8)
+        };
         using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
             null,
             new object[]
             {
-                new RadioChannel { Name = "RADIO 1" },
+                titleBox,
                 new Label { Text = "0 users" },
                 new TextBox(),
                 new Label { Text = "OPEN" },
@@ -127,10 +134,8 @@ public class CompactFieldLayoutTests
         row.CreateControl();
         row.PerformLayout();
 
-        var title = Assert.IsType<Label>(row.GetControlFromPosition(0, 0));
-        Assert.Equal(ContentAlignment.MiddleLeft, title.TextAlign);
-        Assert.Equal(new Padding(0, 0, 0, 8), title.Margin);
-        Assert.Equal(44, title.Height);
+        var title = Assert.IsType<TextBox>(row.GetControlFromPosition(0, 0));
+        Assert.Equal(new Padding(0, 10, 0, 8), title.Margin);
         Assert.Equal(SizeType.Absolute, row.ColumnStyles[0].SizeType);
         Assert.Equal((float)MainFormLayoutPolicy.RadioTitleColumnWidth, row.ColumnStyles[0].Width);
         foreach (var column in new[] { 2, 4, 6, 8 })
@@ -149,6 +154,29 @@ public class CompactFieldLayoutTests
         Assert.Equal(Theme.SoftBorder, activityBadge.EffectiveBorderColor);
         Assert.Equal(AnchorStyles.Top | AnchorStyles.Right, activityBadge.Anchor);
         Assert.Equal(0, activityBadge.Top);
+    }
+
+    [Fact]
+    public void Channel_selector_occupies_left_side_of_ptt_row_and_moves_ptt_a_right()
+    {
+        var channelBox = new DarkComboBox();
+        var pttA = new ModernButton { Text = "PTT A" };
+        var pttB = new ModernButton { Text = "PTT B" };
+        var method = typeof(MainForm).GetMethod("CreatePttRow", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
+            null,
+            new object[] { channelBox, new Label(), pttA, new Label(), pttB }));
+
+        row.Size = new Size(710, 46);
+        row.CreateControl();
+        row.PerformLayout();
+
+        var channelField = row.GetControlFromPosition(0, 0);
+        Assert.NotNull(channelField);
+        Assert.True(channelField!.Left < pttA.Left);
+        Assert.True(pttA.Left >= 100);
+        Assert.Equal("PTT A", pttA.Text);
     }
 
     [Fact]

@@ -15,14 +15,17 @@ public class RelayClientPresenceTests
         using var client = new RelayClient(Guid.NewGuid());
         var updated = new TaskCompletionSource<PresenceChannelCount[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         var totalUpdated = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var namesUpdated = new TaskCompletionSource<string[]>(TaskCreationOptions.RunContinuationsAsynchronously);
         client.PresenceUpdated += counts => updated.TrySetResult(counts);
         client.TotalUserCountUpdated += count => totalUpdated.TrySetResult(count);
+        client.ConnectedClientNamesUpdated += names => namesUpdated.TrySetResult(names);
 
         client.Connect("127.0.0.1", port);
         var received = await ReceiveFromClient(server);
         var packet = new PresenceUpdatePacket
         {
             TotalUserCount = 7,
+            ConnectedClientNames = new[] { "Alpha", "Bravo" },
             Counts = new[]
             {
                 new PresenceChannelCount { Frequency = 251.000f, NetIdHash = new byte[8], UserCount = 4 }
@@ -35,6 +38,7 @@ public class RelayClientPresenceTests
         Assert.Single(await updated.Task);
         Assert.Equal(4, (await updated.Task)[0].UserCount);
         Assert.Equal(7, await totalUpdated.Task);
+        Assert.Equal(new[] { "Alpha", "Bravo" }, await namesUpdated.Task);
     }
 
     private static async Task<UdpReceiveResult> ReceiveFromClient(UdpClient server)
