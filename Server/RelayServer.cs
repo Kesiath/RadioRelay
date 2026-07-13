@@ -196,7 +196,10 @@ namespace RadioRelay.Server
                         var p = HeartbeatPacket.Decode(data);
                         if (_clients.TryGetValue(p.ClientId, out var state) && state.EndPoint.Equals(from))
                         {
-                            state.LastSeen = DateTime.UtcNow;
+                            // Heartbeats are reachability probes, not presence
+                            // leases. Healthy clients refresh presence with
+                            // Subscribe packets; unhealthy clients intentionally
+                            // keep probing without remaining in the online list.
                             SendAck(p.ClientId, from);
                         }
                         else if (IsAuthorized(p.ServerPassword))

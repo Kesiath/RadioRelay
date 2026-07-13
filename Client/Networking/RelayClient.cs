@@ -120,12 +120,7 @@ namespace RadioRelay.Client.Networking
             _heartbeatTimer?.Dispose();
             _healthCheckTimer?.Dispose();
 
-            try
-            {
-                var data = new HeartbeatPacket { ClientId = ClientId, ServerPassword = ServerPassword }.Encode(PacketType.Disconnect);
-                _udp?.Send(data, data.Length);
-            }
-            catch { /* best-effort -- the server will time us out anyway */ }
+            SendPresenceDisconnect();
 
             _cts?.Cancel();
             _udp?.Close();
@@ -237,7 +232,7 @@ namespace RadioRelay.Client.Networking
             // an unknown client while still dropping that client's audio because
             // no ClientState exists for its ClientId.
             var subscriptions = GetLastSubscriptionsSnapshot();
-            if (subscriptions.Length > 0)
+            if (_isHealthy && subscriptions.Length > 0)
             {
                 SendSubscribeSnapshot(subscriptions);
                 return;
@@ -261,9 +256,27 @@ namespace RadioRelay.Client.Networking
         private void SetHealthy(bool healthy)
         {
             if (_hasReportedHealthState && healthy == _isHealthy) return;
+            bool wasHealthy = _isHealthy;
             _isHealthy = healthy;
             _hasReportedHealthState = true;
+
+            // If the outbound path still works but replies are blocked, stop
+            // advertising this client as present. Keep the socket open and use
+            // heartbeat probes so a later ACK can restore the subscription.
+            if (wasHealthy && !healthy)
+                SendPresenceDisconnect();
+
             SafeInvoke(ConnectionHealthChanged, healthy);
+        }
+
+        private void SendPresenceDisconnect()
+        {
+            try
+            {
+                var data = new HeartbeatPacket { ClientId = ClientId, ServerPassword = ServerPassword }.Encode(PacketType.Disconnect);
+                _udp?.Send(data, data.Length);
+            }
+            catch { /* best-effort -- the server will time us out anyway */ }
         }
 
         private async Task ReceiveLoop(CancellationToken ct)

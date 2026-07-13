@@ -80,7 +80,9 @@ public class RelayClientConnectionHealthTests
         {
             new PresenceSubscription { Frequency = 251.000f, NetIdHash = new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 } }
         });
-        await ReceivePacketFromClient(server, PacketType.Subscribe);
+        var subscribed = await ReceivePacketFromClient(server, PacketType.Subscribe);
+        await SendAck(server, subscribed, client.ClientId);
+        await WaitUntilHealthy(client);
 
         InvokeHeartbeat(client);
         var refreshed = await ReceivePacketFromClient(server, PacketType.Subscribe);
@@ -92,6 +94,43 @@ public class RelayClientConnectionHealthTests
         Assert.Single(subscribe.Subscriptions);
         Assert.Equal(251.000f, subscribe.Subscriptions[0].Frequency, precision: 3);
         Assert.Equal(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }, subscribe.Subscriptions[0].NetIdHash);
+    }
+
+    [Fact]
+    public async Task Unhealthy_client_uses_probe_instead_of_refreshing_cached_subscription()
+    {
+        using var server = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        int port = ((IPEndPoint)server.Client.LocalEndPoint!).Port;
+        using var client = new RelayClient(Guid.NewGuid());
+
+        client.Connect("127.0.0.1", port);
+        await ReceivePacketFromClient(server, PacketType.Heartbeat);
+        client.SendSubscribe(new[] { new PresenceSubscription { Frequency = 251.000f } });
+        await ReceivePacketFromClient(server, PacketType.Subscribe);
+
+        InvokeHeartbeat(client);
+
+        await ReceivePacketFromClient(server, PacketType.Heartbeat);
+    }
+
+    [Fact]
+    public async Task Established_client_withdraws_presence_when_server_acks_stop()
+    {
+        using var server = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+        int port = ((IPEndPoint)server.Client.LocalEndPoint!).Port;
+        using var client = new RelayClient(Guid.NewGuid());
+
+        client.Connect("127.0.0.1", port);
+        var heartbeat = await ReceivePacketFromClient(server, PacketType.Heartbeat);
+        await SendAck(server, heartbeat, client.ClientId);
+        await WaitUntilHealthy(client);
+
+        SetLastAckReceived(client, DateTime.MinValue);
+        InvokeHealthCheck(client);
+
+        await ReceivePacketFromClient(server, PacketType.Disconnect);
+        Assert.True(client.IsConnected);
+        Assert.False(client.IsHealthy);
     }
 
     [Fact]
@@ -250,6 +289,22 @@ public class RelayClientConnectionHealthTests
         typeof(RelayClient)
             .GetMethod("CheckHealth", BindingFlags.Instance | BindingFlags.NonPublic)!
             .Invoke(client, null);
+    }
+
+    private static void SetLastAckReceived(RelayClient client, DateTime value)
+    {
+        typeof(RelayClient)
+            .GetField("_lastAckReceived", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(client, value);
+    }
+
+    private static async Task WaitUntilHealthy(RelayClient client)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (!client.IsHealthy && DateTime.UtcNow < deadline)
+            await Task.Delay(10);
+
+        Assert.True(client.IsHealthy);
     }
 
     private static UdpClient? GetUdpClient(RelayClient client) =>

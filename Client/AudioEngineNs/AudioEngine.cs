@@ -67,6 +67,7 @@ namespace RadioRelay.Client.AudioEngineNs
         public string PendingRemoteCallsign = "";
         public bool HasAudibleReceiveInFlight;
         public DateTime? LastRemotePacketUtc;
+        public readonly Dictionary<Guid, DateTime> LastRemotePacketUtcByClient = new();
     }
 
     /// 
@@ -93,7 +94,7 @@ namespace RadioRelay.Client.AudioEngineNs
         private static readonly WaveFormat Format = new(SampleRate, 16, 1);
         private const int FrameSize = OpusCodec.FrameSize; // 320 samples = 20ms
         internal const int TransmissionEndRedundantPacketCount = 3;
-        internal static readonly TimeSpan StaleRemoteHudFallbackTimeout = TimeSpan.FromMilliseconds(500);
+        internal static readonly TimeSpan StaleRemoteActivityFallbackTimeout = TimeSpan.FromMilliseconds(500);
 
         private WaveInEvent? _waveIn;
         private WaveOutEvent? _waveOut;
@@ -340,6 +341,7 @@ namespace RadioRelay.Client.AudioEngineNs
             rxState.PendingRemoteCallsign = "";
             rxState.HasAudibleReceiveInFlight = false;
             rxState.LastRemotePacketUtc = null;
+            rxState.LastRemotePacketUtcByClient.Clear();
             rxState.TalkOver.ClearRemoteTransmitters();
             rxState.TalkOverWarningCue.Reset();
             rxState.Interference.Reset();
@@ -599,7 +601,17 @@ namespace RadioRelay.Client.AudioEngineNs
                     }
 
                     if (!PacketMatchesChannelForReceiveControl(ch, packet)) continue;
-                    rxState.LastRemotePacketUtc = DateTime.UtcNow;
+                    var packetReceivedUtc = DateTime.UtcNow;
+                    foreach (var expiredSenderId in ExpireStaleRemoteTransmitters(
+                        rxState,
+                        packet.ClientId,
+                        packetReceivedUtc,
+                        StaleRemoteActivityFallbackTimeout))
+                    {
+                        EndRemoteReceiveHud(ch, rxState, expiredSenderId.ToString());
+                    }
+                    rxState.LastRemotePacketUtc = packetReceivedUtc;
+                    rxState.LastRemotePacketUtcByClient[packet.ClientId] = packetReceivedUtc;
 
                     bool remoteEndControlProcessed = false;
                     bool remoteEndWasAcceptedSender = false;
@@ -613,6 +625,7 @@ namespace RadioRelay.Client.AudioEngineNs
 
                         rxState.TalkOver.ObserveRemoteTransmissionEnd(packet.ClientId);
                         rxState.Interference.ObserveTransmissionEnd(packet.ClientId);
+                        rxState.LastRemotePacketUtcByClient.Remove(packet.ClientId);
                         if (!rxState.Interference.HasInterference)
                             rxState.CollisionDestruction.Reset();
                         if (!deferHudEndUntilAudioDrains)
@@ -754,21 +767,44 @@ namespace RadioRelay.Client.AudioEngineNs
             hasAudibleReceiveInFlight &&
             !RadioReceiveMute.ShouldMuteReceivedAudio(localTransmitting);
 
-        internal static bool ShouldFallbackClearStaleRemoteHud(
-            bool isReceiveHudActive,
+        internal static bool ShouldFallbackClearStaleRemoteActivity(
+            bool hasRemoteActivity,
             bool localTransmitting,
-            bool hasAudibleReceiveInFlight,
             bool isReceivingActive,
             DateTime? lastRemotePacketUtc,
             DateTime nowUtc,
             TimeSpan idleTimeout)
         {
-            if (!isReceiveHudActive) return false;
+            if (!hasRemoteActivity) return false;
             if (localTransmitting) return false;
             if (isReceivingActive) return false;
             if (lastRemotePacketUtc == null) return false;
 
             return nowUtc - lastRemotePacketUtc.Value >= idleTimeout;
+        }
+
+        internal static Guid[] ExpireStaleRemoteTransmitters(
+            RxState rxState,
+            Guid currentSenderId,
+            DateTime nowUtc,
+            TimeSpan idleTimeout)
+        {
+            var expiredSenderIds = rxState.LastRemotePacketUtcByClient
+                .Where(entry => entry.Key != currentSenderId && nowUtc - entry.Value >= idleTimeout)
+                .Select(entry => entry.Key)
+                .ToArray();
+
+            foreach (var senderId in expiredSenderIds)
+            {
+                rxState.LastRemotePacketUtcByClient.Remove(senderId);
+                rxState.TalkOver.ObserveRemoteTransmissionEnd(senderId);
+                rxState.Interference.ObserveTransmissionEnd(senderId);
+            }
+
+            if (!rxState.Interference.HasInterference)
+                rxState.CollisionDestruction.Reset();
+
+            return expiredSenderIds;
         }
 
         internal static void ReacquireRemoteReceiveFromMidStream(
@@ -1045,21 +1081,26 @@ namespace RadioRelay.Client.AudioEngineNs
                         }
                     }
 
-                    if (ShouldFallbackClearStaleRemoteHud(
-                        rxState.IsReceiveHudActive,
+                    bool hasRemoteActivity = rxState.IsReceiveHudActive ||
+                        rxState.TalkOver.HasRemoteTransmitters ||
+                        rxState.Interference.HasPrimarySender;
+                    if (ShouldFallbackClearStaleRemoteActivity(
+                        hasRemoteActivity,
                         IsTransmitting(ch),
-                        rxState.HasAudibleReceiveInFlight,
                         rxState.IsReceivingActive,
                         rxState.LastRemotePacketUtc,
                         DateTime.UtcNow,
-                        StaleRemoteHudFallbackTimeout))
+                        StaleRemoteActivityFallbackTimeout))
                     {
                         jitter.Reset();
                         rxState.TalkOver.ClearRemoteTransmitters();
+                        rxState.TalkOverWarningCue.Reset();
                         rxState.Interference.Reset();
                         rxState.CollisionDestruction.Reset();
                         rxState.IsReceivingActive = false;
                         rxState.HasAudibleReceiveInFlight = false;
+                        rxState.LastRemotePacketUtc = null;
+                        rxState.LastRemotePacketUtcByClient.Clear();
                         EndAllRemoteReceiveHuds(ch, rxState, (_, remoteCallsign, remoteClientId) =>
                             RaiseRemoteTransmissionEnded(ch, remoteCallsign, remoteClientId));
                     }

@@ -27,55 +27,94 @@ public class RemoteReceiveHudLifecycleTests
     }
 
     [Fact]
-    public void Stale_rx_hud_fallback_clears_only_after_idle_timeout_with_no_local_or_audible_activity()
+    public void Stale_remote_activity_fallback_clears_only_after_idle_timeout()
     {
         var lastPacket = new DateTime(2026, 7, 8, 20, 35, 0, DateTimeKind.Utc);
         var timeout = TimeSpan.FromMilliseconds(500);
 
-        Assert.False(AudioEngine.ShouldFallbackClearStaleRemoteHud(
-            isReceiveHudActive: true,
+        Assert.False(AudioEngine.ShouldFallbackClearStaleRemoteActivity(
+            hasRemoteActivity: true,
             localTransmitting: false,
-            hasAudibleReceiveInFlight: false,
             isReceivingActive: false,
             lastRemotePacketUtc: lastPacket,
             nowUtc: lastPacket.AddMilliseconds(499),
             idleTimeout: timeout));
 
-        Assert.True(AudioEngine.ShouldFallbackClearStaleRemoteHud(
-            isReceiveHudActive: true,
+        Assert.True(AudioEngine.ShouldFallbackClearStaleRemoteActivity(
+            hasRemoteActivity: true,
             localTransmitting: false,
-            hasAudibleReceiveInFlight: false,
             isReceivingActive: false,
             lastRemotePacketUtc: lastPacket,
             nowUtc: lastPacket.AddMilliseconds(500),
             idleTimeout: timeout));
 
-        Assert.False(AudioEngine.ShouldFallbackClearStaleRemoteHud(
-            isReceiveHudActive: true,
+        Assert.False(AudioEngine.ShouldFallbackClearStaleRemoteActivity(
+            hasRemoteActivity: true,
             localTransmitting: true,
-            hasAudibleReceiveInFlight: false,
             isReceivingActive: false,
             lastRemotePacketUtc: lastPacket,
             nowUtc: lastPacket.AddMilliseconds(500),
             idleTimeout: timeout));
 
-        Assert.True(AudioEngine.ShouldFallbackClearStaleRemoteHud(
-            isReceiveHudActive: true,
+        Assert.False(AudioEngine.ShouldFallbackClearStaleRemoteActivity(
+            hasRemoteActivity: true,
             localTransmitting: false,
-            hasAudibleReceiveInFlight: true,
-            isReceivingActive: false,
-            lastRemotePacketUtc: lastPacket,
-            nowUtc: lastPacket.AddMilliseconds(500),
-            idleTimeout: timeout));
-
-        Assert.False(AudioEngine.ShouldFallbackClearStaleRemoteHud(
-            isReceiveHudActive: true,
-            localTransmitting: false,
-            hasAudibleReceiveInFlight: true,
             isReceivingActive: true,
             lastRemotePacketUtc: lastPacket,
             nowUtc: lastPacket.AddMilliseconds(500),
             idleTimeout: timeout));
+    }
+
+    [Fact]
+    public void Stale_hidden_transmitter_is_eligible_for_cleanup_after_playout_drains()
+    {
+        var lastPacket = new DateTime(2026, 7, 13, 16, 0, 0, DateTimeKind.Utc);
+        var timeout = AudioEngine.StaleRemoteActivityFallbackTimeout;
+
+        Assert.True(AudioEngine.ShouldFallbackClearStaleRemoteActivity(
+            hasRemoteActivity: true,
+            localTransmitting: false,
+            isReceivingActive: false,
+            lastRemotePacketUtc: lastPacket,
+            nowUtc: lastPacket.Add(timeout),
+            idleTimeout: timeout));
+
+        Assert.False(AudioEngine.ShouldFallbackClearStaleRemoteActivity(
+            hasRemoteActivity: false,
+            localTransmitting: false,
+            isReceivingActive: false,
+            lastRemotePacketUtc: lastPacket,
+            nowUtc: lastPacket.Add(timeout),
+            idleTimeout: timeout));
+    }
+
+    [Fact]
+    public void Live_sender_can_reacquire_receiver_after_stale_capture_owner_expires()
+    {
+        var rxState = new RxState();
+        var staleSender = Guid.NewGuid();
+        var liveSender = Guid.NewGuid();
+        var now = new DateTime(2026, 7, 13, 16, 0, 1, DateTimeKind.Utc);
+        var timeout = AudioEngine.StaleRemoteActivityFallbackTimeout;
+
+        rxState.TalkOver.ObserveRemoteTransmissionStart(staleSender);
+        rxState.TalkOver.ObserveRemoteTransmissionStart(liveSender);
+        Assert.True(rxState.Interference.ObserveTransmissionStart(staleSender).AcceptAudio);
+        Assert.False(rxState.Interference.ObserveTransmissionStart(liveSender).AcceptAudio);
+        rxState.LastRemotePacketUtcByClient[staleSender] = now.Subtract(timeout);
+        rxState.LastRemotePacketUtcByClient[liveSender] = now;
+
+        var expired = AudioEngine.ExpireStaleRemoteTransmitters(
+            rxState,
+            currentSenderId: liveSender,
+            nowUtc: now,
+            idleTimeout: timeout);
+
+        Assert.Equal(new[] { staleSender }, expired);
+        Assert.False(rxState.TalkOver.IsRemoteTransmitting(staleSender));
+        Assert.True(rxState.TalkOver.IsRemoteTransmitting(liveSender));
+        Assert.False(rxState.Interference.HasPrimarySender);
+        Assert.True(rxState.Interference.ObserveMidStreamTransmission(liveSender).AcceptAudio);
     }
 
     [Fact]
