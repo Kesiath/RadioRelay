@@ -69,12 +69,20 @@ public class PresenceProtocolTests
     [Fact]
     public void PresenceUpdatePacket_round_trips_frequency_key_counts()
     {
+        var twentyFourNames = Enumerable.Range(1, 24).Select(index => $"User {index:00}").ToArray();
         var packet = new PresenceUpdatePacket
         {
-            TotalUserCount = 5,
+            TotalUserCount = twentyFourNames.Length,
+            ConnectedClientNames = twentyFourNames,
             Counts = new[]
             {
-                new PresenceChannelCount { Frequency = 251.000f, NetIdHash = KeyA, UserCount = 3 },
+                new PresenceChannelCount
+                {
+                    Frequency = 251.000f,
+                    NetIdHash = KeyA,
+                    UserCount = twentyFourNames.Length,
+                    ClientNames = twentyFourNames
+                },
                 new PresenceChannelCount { Frequency = 251.000f, NetIdHash = KeyB, UserCount = 1 }
             }
         };
@@ -85,10 +93,12 @@ public class PresenceProtocolTests
         Assert.Equal(2, decoded.Counts.Length);
         Assert.Equal(251.000f, decoded.Counts[0].Frequency);
         Assert.Equal(KeyA, decoded.Counts[0].NetIdHash);
-        Assert.Equal(3, decoded.Counts[0].UserCount);
+        Assert.Equal(24, decoded.Counts[0].UserCount);
+        Assert.Equal(twentyFourNames, decoded.Counts[0].ClientNames);
         Assert.Equal(KeyB, decoded.Counts[1].NetIdHash);
         Assert.Equal(1, decoded.Counts[1].UserCount);
-        Assert.Equal(5, decoded.TotalUserCount);
+        Assert.Equal(24, decoded.TotalUserCount);
+        Assert.Equal(twentyFourNames, decoded.ConnectedClientNames);
     }
 
     [Fact]

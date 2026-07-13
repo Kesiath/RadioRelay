@@ -38,9 +38,15 @@ namespace RadioRelay.Client.Input
         private RadioChannel? _capturingChannel;
         private PttSlot _capturingSlot;
         private Action<PttBinding?>? _captureCallback;
+        private bool _capturingIcpToggle;
+        private PttBinding? _icpToggleBinding;
+        private bool _icpToggleDown;
+        private bool _escapeDown;
 
         public event Action<RadioChannel>? PttDown;
         public event Action<RadioChannel>? PttUp;
+        public event Action? IcpTogglePressed;
+        public event Action? EscapePressed;
 
         public void Start()
         {
@@ -79,14 +85,31 @@ namespace RadioRelay.Client.Input
         /// binding. Only one capture can be active at a time.
         public void StartCapture(RadioChannel channel, PttSlot slot, Action<PttBinding?> onCaptured)
         {
+            _capturingIcpToggle = false;
             _capturingChannel = channel;
             _capturingSlot = slot;
+            _captureCallback = onCaptured;
+        }
+
+        public PttBinding? GetIcpToggleBinding() => _icpToggleBinding;
+
+        public void SetIcpToggleBinding(PttBinding? binding)
+        {
+            _icpToggleBinding = binding;
+            _icpToggleDown = false;
+        }
+
+        public void StartIcpToggleCapture(Action<PttBinding?> onCaptured)
+        {
+            _capturingChannel = null;
+            _capturingIcpToggle = true;
             _captureCallback = onCaptured;
         }
 
         public void CancelCapture()
         {
             _capturingChannel = null;
+            _capturingIcpToggle = false;
             _captureCallback = null;
         }
 
@@ -118,6 +141,27 @@ namespace RadioRelay.Client.Input
 
         private void OnRawInput(PttBindingType type, Guid deviceGuid, int code, bool pressed)
         {
+            if (_capturingIcpToggle)
+            {
+                if (!pressed) return;
+
+                var callback = _captureCallback;
+                _capturingIcpToggle = false;
+                _captureCallback = null;
+
+                if (type == PttBindingType.Keyboard && code == (int)Keys.Escape)
+                {
+                    SetIcpToggleBinding(null);
+                    SafeInvoke(callback, null);
+                    return;
+                }
+
+                var binding = CreateBinding(type, deviceGuid, code);
+                SetIcpToggleBinding(binding);
+                SafeInvoke(callback, binding);
+                return;
+            }
+
             if (_capturingChannel != null)
             {
                 if (!pressed)
@@ -143,6 +187,22 @@ namespace RadioRelay.Client.Input
                 SetBinding(channel, slot, binding);
                 SafeInvoke(callback, binding);
                 return;
+            }
+
+            if (type == PttBindingType.Keyboard && code == (int)Keys.Escape)
+            {
+                bool wasDown = _escapeDown;
+                _escapeDown = pressed;
+                if (pressed && !wasDown) SafeInvoke(EscapePressed);
+            }
+
+            if (_icpToggleBinding != null &&
+                type == _icpToggleBinding.Type &&
+                BindingMatches(type, deviceGuid, code, _icpToggleBinding))
+            {
+                bool wasDown = _icpToggleDown;
+                _icpToggleDown = pressed;
+                if (pressed && !wasDown) SafeInvoke(IcpTogglePressed);
             }
 
             // A single physical input can legitimately be bound to more than
@@ -199,6 +259,16 @@ namespace RadioRelay.Client.Input
             {
                 try { subscriber(arg); }
                 catch { /* Input hook callbacks must not be killed by UI shutdown/subscriber failures. */ }
+            }
+        }
+
+        private static void SafeInvoke(Action? handler)
+        {
+            if (handler == null) return;
+            foreach (Action subscriber in handler.GetInvocationList().Cast<Action>())
+            {
+                try { subscriber(); }
+                catch { }
             }
         }
 

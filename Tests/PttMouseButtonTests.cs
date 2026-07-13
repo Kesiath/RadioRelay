@@ -42,4 +42,54 @@ public class PttMouseButtonTests
 
         Assert.Equal(new[] { "down:RADIO 1", "up:RADIO 1" }, events);
     }
+
+    [Fact]
+    public void Icp_toggle_fires_once_per_press_instead_of_repeating_while_held()
+    {
+        using var manager = new PttInputManager();
+        int toggles = 0;
+        manager.IcpTogglePressed += () => toggles++;
+        manager.SetIcpToggleBinding(new PttBinding
+        {
+            Type = PttBindingType.Keyboard,
+            KeyCode = (int)System.Windows.Forms.Keys.F10,
+            DisplayName = "Keyboard: F10"
+        });
+
+        manager.HandleRawInputForTest(PttBindingType.Keyboard, Guid.Empty, (int)System.Windows.Forms.Keys.F10, pressed: true);
+        manager.HandleRawInputForTest(PttBindingType.Keyboard, Guid.Empty, (int)System.Windows.Forms.Keys.F10, pressed: true);
+        manager.HandleRawInputForTest(PttBindingType.Keyboard, Guid.Empty, (int)System.Windows.Forms.Keys.F10, pressed: false);
+        manager.HandleRawInputForTest(PttBindingType.Keyboard, Guid.Empty, (int)System.Windows.Forms.Keys.F10, pressed: true);
+
+        Assert.Equal(2, toggles);
+    }
+
+    [Fact]
+    public void Escape_during_icp_capture_clears_the_binding()
+    {
+        using var manager = new PttInputManager();
+        manager.SetIcpToggleBinding(new PttBinding { KeyCode = (int)System.Windows.Forms.Keys.F10 });
+        PttBinding? captured = new();
+
+        manager.StartIcpToggleCapture(binding => captured = binding);
+        manager.HandleRawInputForTest(PttBindingType.Keyboard, Guid.Empty, (int)System.Windows.Forms.Keys.Escape, pressed: true);
+
+        Assert.Null(captured);
+        Assert.Null(manager.GetIcpToggleBinding());
+    }
+
+    [Fact]
+    public void Escape_fires_once_per_press_for_global_overlay_dismissal()
+    {
+        using var manager = new PttInputManager();
+        int presses = 0;
+        manager.EscapePressed += () => presses++;
+
+        manager.HandleRawInputForTest(PttBindingType.Keyboard, Guid.Empty, (int)System.Windows.Forms.Keys.Escape, pressed: true);
+        manager.HandleRawInputForTest(PttBindingType.Keyboard, Guid.Empty, (int)System.Windows.Forms.Keys.Escape, pressed: true);
+        manager.HandleRawInputForTest(PttBindingType.Keyboard, Guid.Empty, (int)System.Windows.Forms.Keys.Escape, pressed: false);
+        manager.HandleRawInputForTest(PttBindingType.Keyboard, Guid.Empty, (int)System.Windows.Forms.Keys.Escape, pressed: true);
+
+        Assert.Equal(2, presses);
+    }
 }

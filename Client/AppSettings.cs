@@ -20,6 +20,13 @@ namespace RadioRelay.Client
         public string DisplayName { get; set; } = "";
     }
 
+    public class RadioPresetSettings
+    {
+        public int Channel { get; set; }
+        public float Frequency { get; set; }
+        public string Passcode { get; set; } = "";
+    }
+
     /// Persisted per-radio state -- everything a user configures
     /// for one radio row, matched back up by radio Name on load.
     public class RadioSettings
@@ -31,6 +38,8 @@ namespace RadioRelay.Client
         public float Volume { get; set; } = 1f;
         public RadioEar Ear { get; set; } = RadioEar.Both;
         public string Passcode { get; set; } = "";
+        public int SelectedChannel { get; set; } = 1;
+        public List<RadioPresetSettings> Channels { get; set; } = new();
 
         public PttSlotSettings PttPrimary { get; set; } = new();
         public PttSlotSettings PttSecondary { get; set; } = new();
@@ -65,6 +74,11 @@ namespace RadioRelay.Client
         public string Callsign { get; set; } = "";
         public int PttReleaseDelayMs { get; set; } = 200;
         public bool ControlLockEnabled { get; set; }
+        // The ICP binding and position are machine-local and intentionally
+        // omitted from operational profile exports.
+        public PttSlotSettings IcpToggle { get; set; } = new();
+        public int? IcpX { get; set; }
+        public int? IcpY { get; set; }
 
         public int InputDeviceIndex { get; set; } = -1;
         public int OutputDeviceIndex { get; set; } = -1;
@@ -159,14 +173,46 @@ namespace RadioRelay.Client
                     {
                         Name = imported.Name,
                         Frequency = imported.Frequency,
-                        Passcode = imported.Passcode
+                        Passcode = imported.Passcode,
+                        SelectedChannel = Math.Clamp(imported.SelectedChannel, 1, RadioChannel.PresetCount),
+                        Channels = OperationalChannelsFrom(imported)
                     });
                     continue;
                 }
 
                 existing.Frequency = imported.Frequency;
                 existing.Passcode = imported.Passcode;
+                existing.SelectedChannel = Math.Clamp(imported.SelectedChannel, 1, RadioChannel.PresetCount);
+                existing.Channels = OperationalChannelsFrom(imported);
             }
+        }
+
+        private static List<RadioPresetSettings> OperationalChannelsFrom(RadioSettings imported)
+        {
+            if (imported.Channels != null && imported.Channels.Count > 0)
+            {
+                return imported.Channels
+                    .Where(channel => channel.Channel >= 1 && channel.Channel <= RadioChannel.PresetCount)
+                    .Select(channel => new RadioPresetSettings
+                    {
+                        Channel = channel.Channel,
+                        Frequency = channel.Frequency,
+                        Passcode = channel.Passcode ?? ""
+                    })
+                    .ToList();
+            }
+
+            // Legacy profiles represented one radio with one frequency/key.
+            // Treat that pair as Channel 1; runtime fills 2-9 from radio defaults.
+            return new List<RadioPresetSettings>
+            {
+                new()
+                {
+                    Channel = 1,
+                    Frequency = imported.Frequency,
+                    Passcode = imported.Passcode ?? ""
+                }
+            };
         }
 
         private string ToJson() =>
@@ -184,7 +230,14 @@ namespace RadioRelay.Client
             {
                 Name = r.Name,
                 Frequency = r.Frequency,
-                Passcode = r.Passcode
+                Passcode = r.Passcode,
+                SelectedChannel = r.SelectedChannel,
+                Channels = OperationalChannelsFrom(r).ConvertAll(channel => new OperationalExportPresetSettings
+                {
+                    Channel = channel.Channel,
+                    Frequency = channel.Frequency,
+                    Passcode = channel.Passcode
+                })
             })
         };
 
@@ -199,6 +252,15 @@ namespace RadioRelay.Client
         private sealed class OperationalExportRadioSettings
         {
             public string Name { get; set; } = "";
+            public float Frequency { get; set; }
+            public string Passcode { get; set; } = "";
+            public int SelectedChannel { get; set; } = 1;
+            public List<OperationalExportPresetSettings> Channels { get; set; } = new();
+        }
+
+        private sealed class OperationalExportPresetSettings
+        {
+            public int Channel { get; set; }
             public float Frequency { get; set; }
             public string Passcode { get; set; } = "";
         }

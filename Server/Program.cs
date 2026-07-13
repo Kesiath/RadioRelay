@@ -32,7 +32,8 @@ namespace RadioRelay.Server
 
             var runTask = server.RunAsync(cts.Token);
             _ = RunAdminConsoleAsync(server, cts, log);
-            Console.WriteLine($"RadioRelay server running{(string.IsNullOrEmpty(settings.Password) ? "" : " with password enabled")}. Commands: help, clients, kick <client>, stats, banlist, ban <ip>, unban <ip>, quit. Press Ctrl+C to stop.");
+            Console.WriteLine($"RadioRelay server {ServerVersion.Current} running{(string.IsNullOrEmpty(settings.Password) ? "" : " with password enabled")}. Commands: help, clients, kick <client>, stats, banlist, ban <ip>, unban <ip>, quit. Press Ctrl+C to stop.");
+            _ = CheckForServerUpdateAsync(log, cts.Token);
 
             try
             {
@@ -54,6 +55,38 @@ namespace RadioRelay.Server
             }
 
             return EnvFile.Empty;
+        }
+
+        private static async Task CheckForServerUpdateAsync(LocalLog log, CancellationToken cancellationToken)
+        {
+            try
+            {
+                var status = await GitHubServerUpdateChecker.CheckAsync(ServerVersion.Current, cancellationToken);
+                if (status == null)
+                {
+                    Console.WriteLine("[Update] Unable to check GitHub for the latest RadioRelay release.");
+                    return;
+                }
+
+                if (status.UpdateAvailable)
+                {
+                    Console.WriteLine(
+                        $"[Update] RadioRelay server {status.LatestVersion} is available; " +
+                        $"this server is running {ServerVersion.Current}. {status.ReleaseUrl}");
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"[Update] RadioRelay server {ServerVersion.Current} is up to date " +
+                        $"(latest GitHub release: {status.LatestVersion}).");
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Update] GitHub update check failed: {ex.Message}");
+                log.LogException(ErrorCodes.ServerStart, "server GitHub update check failed", ex);
+            }
         }
 
         private static IEnumerable<string> EnvFileCandidatePaths()

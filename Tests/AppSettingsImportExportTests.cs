@@ -49,6 +49,12 @@ public class AppSettingsImportExportTests
                     Volume = 0.75f,
                     Ear = RadioEar.Left,
                     Passcode = "red",
+                    SelectedChannel = 1,
+                    Channels = new List<RadioPresetSettings>
+                    {
+                        new() { Channel = 1, Frequency = 251.000f, Passcode = "red" },
+                        new() { Channel = 2, Frequency = 260.500f, Passcode = "blue" }
+                    },
                     HudColorArgb = 123,
                     HudX = 11,
                     HudY = 22,
@@ -72,6 +78,12 @@ public class AppSettingsImportExportTests
         Assert.Equal("RADIO 1", radio.GetProperty("Name").GetString());
         Assert.Equal(251.000f, radio.GetProperty("Frequency").GetSingle(), precision: 3);
         Assert.Equal("red", radio.GetProperty("Passcode").GetString());
+        Assert.Equal(1, radio.GetProperty("SelectedChannel").GetInt32());
+        var channels = radio.GetProperty("Channels").EnumerateArray().ToArray();
+        Assert.Equal(2, channels.Length);
+        Assert.Equal(2, channels[1].GetProperty("Channel").GetInt32());
+        Assert.Equal(260.500f, channels[1].GetProperty("Frequency").GetSingle(), precision: 3);
+        Assert.Equal("blue", channels[1].GetProperty("Passcode").GetString());
 
         Assert.False(root.TryGetProperty("Callsign", out _));
         Assert.False(root.TryGetProperty("PttReleaseDelayMs", out _));
@@ -106,7 +118,18 @@ public class AppSettingsImportExportTests
             InputGain = 1.4f,
             Radios = new List<RadioSettings>
             {
-                new() { Name = "RADIO 2", Frequency = 305.500f, Volume = 0.5f, Ear = RadioEar.Right, Passcode = "blue" }
+                new()
+                {
+                    Name = "RADIO 2",
+                    Frequency = 310.250f,
+                    Passcode = "strike",
+                    SelectedChannel = 3,
+                    Channels = new List<RadioPresetSettings>
+                    {
+                        new() { Channel = 1, Frequency = 305.500f, Passcode = "blue" },
+                        new() { Channel = 3, Frequency = 310.250f, Passcode = "strike" }
+                    }
+                }
             }
         };
         var exportedPath = original.ExportToDirectory(dir);
@@ -120,8 +143,12 @@ public class AppSettingsImportExportTests
         Assert.Equal(1.0f, imported.InputGain);
         var radio = Assert.Single(imported.Radios);
         Assert.Equal("RADIO 2", radio.Name);
-        Assert.Equal(305.500f, radio.Frequency);
-        Assert.Equal("blue", radio.Passcode);
+        Assert.Equal(310.250f, radio.Frequency);
+        Assert.Equal("strike", radio.Passcode);
+        Assert.Equal(3, radio.SelectedChannel);
+        Assert.Equal(2, radio.Channels.Count);
+        Assert.Equal(305.500f, radio.Channels.Single(channel => channel.Channel == 1).Frequency);
+        Assert.Equal("blue", radio.Channels.Single(channel => channel.Channel == 1).Passcode);
         Assert.Equal(1.0f, radio.Volume);
         Assert.Equal(RadioEar.Both, radio.Ear);
     }
@@ -171,7 +198,18 @@ public class AppSettingsImportExportTests
             InputGain = 0.1f,
             Radios = new List<RadioSettings>
             {
-                new() { Name = "RADIO 1", Frequency = 251.000f, Volume = 1.0f, Ear = RadioEar.Both, Passcode = "new-red" }
+                new()
+                {
+                    Name = "RADIO 1",
+                    Frequency = 255.000f,
+                    Passcode = "new-blue",
+                    SelectedChannel = 2,
+                    Channels = new List<RadioPresetSettings>
+                    {
+                        new() { Channel = 1, Frequency = 251.000f, Passcode = "new-red" },
+                        new() { Channel = 2, Frequency = 255.000f, Passcode = "new-blue" }
+                    }
+                }
             }
         };
 
@@ -193,8 +231,11 @@ public class AppSettingsImportExportTests
         var radio = Assert.Single(local.Radios);
         Assert.Equal("RADIO 1", radio.Name);
         Assert.Equal("Local Guard", radio.LocalName);
-        Assert.Equal(251.000f, radio.Frequency);
-        Assert.Equal("new-red", radio.Passcode);
+        Assert.Equal(255.000f, radio.Frequency);
+        Assert.Equal("new-blue", radio.Passcode);
+        Assert.Equal(2, radio.SelectedChannel);
+        Assert.Equal(2, radio.Channels.Count);
+        Assert.Equal("new-red", radio.Channels.Single(channel => channel.Channel == 1).Passcode);
         Assert.Equal(0.45f, radio.Volume);
         Assert.Equal(RadioEar.Left, radio.Ear);
         Assert.Equal(456, radio.HudColorArgb);

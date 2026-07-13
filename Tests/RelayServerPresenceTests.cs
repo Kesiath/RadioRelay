@@ -22,10 +22,10 @@ public class RelayServerPresenceTests
             using var bravo = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
             var key = new byte[] { 9, 9, 9, 9, 9, 9, 9, 9 };
 
-            await SendSubscribe(alpha, port, Guid.NewGuid(), 251.000f, key);
+            await SendSubscribe(alpha, port, Guid.NewGuid(), "Zulu", 251.000f, key);
             await DrainUntilPresence(alpha, expectedCount: 1);
 
-            await SendSubscribe(bravo, port, Guid.NewGuid(), 251.004f, key);
+            await SendSubscribe(bravo, port, Guid.NewGuid(), "Alpha", 251.004f, key);
 
             var alphaPresence = await DrainUntilPresence(alpha, expectedCount: 2);
             var bravoPresence = await DrainUntilPresence(bravo, expectedCount: 2);
@@ -34,6 +34,9 @@ public class RelayServerPresenceTests
             Assert.Contains(bravoPresence.Counts, c => c.Matches(251.000f, key) && c.UserCount == 2);
             Assert.Equal(2, alphaPresence.TotalUserCount);
             Assert.Equal(2, bravoPresence.TotalUserCount);
+            Assert.Equal(new[] { "Alpha", "Zulu" }, alphaPresence.ConnectedClientNames);
+            Assert.Contains(alphaPresence.Counts, count =>
+                count.Matches(251.000f, key) && count.ClientNames.SequenceEqual(new[] { "Alpha", "Zulu" }));
         }
         finally
         {
@@ -42,12 +45,12 @@ public class RelayServerPresenceTests
         }
     }
 
-    private static async Task SendSubscribe(UdpClient client, int port, Guid clientId, float frequency, byte[] key)
+    private static async Task SendSubscribe(UdpClient client, int port, Guid clientId, string callsign, float frequency, byte[] key)
     {
         var packet = new SubscribePacket
         {
             ClientId = clientId,
-            Callsign = "Test",
+            Callsign = callsign,
             Subscriptions = new[] { new PresenceSubscription { Frequency = frequency, NetIdHash = key } }
         }.Encode();
         await client.SendAsync(packet, packet.Length, new IPEndPoint(IPAddress.Loopback, port));
