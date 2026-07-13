@@ -45,6 +45,37 @@ public class RelayServerPresenceTests
         }
     }
 
+    [Fact]
+    public async Task Heartbeat_probe_does_not_extend_presence_lease()
+    {
+        int port = GetAvailableUdpPort();
+        using var cts = new CancellationTokenSource();
+        var server = new RelayServer(port);
+        var runTask = server.RunAsync(cts.Token);
+
+        try
+        {
+            await Task.Delay(150);
+            using var client = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            var clientId = Guid.NewGuid();
+            await SendSubscribe(client, port, clientId, "Probe", 251.000f, new byte[8]);
+            await DrainUntilPresence(client, expectedCount: 1);
+            var subscribedLastSeen = server.GetClientSnapshots().Single().LastSeenUtc;
+
+            await Task.Delay(25);
+            var heartbeat = new HeartbeatPacket { ClientId = clientId }.Encode();
+            await client.SendAsync(heartbeat, heartbeat.Length, new IPEndPoint(IPAddress.Loopback, port));
+            await DrainUntilPacket(client, PacketType.HeartbeatAck);
+
+            Assert.Equal(subscribedLastSeen, server.GetClientSnapshots().Single().LastSeenUtc);
+        }
+        finally
+        {
+            cts.Cancel();
+            await WaitForServerToStop(runTask);
+        }
+    }
+
     private static async Task SendSubscribe(UdpClient client, int port, Guid clientId, string callsign, float frequency, byte[] key)
     {
         var packet = new SubscribePacket
@@ -75,6 +106,23 @@ public class RelayServerPresenceTests
         }
 
         throw new TimeoutException($"Timed out waiting for presence count {expectedCount}.");
+    }
+
+    private static async Task DrainUntilPacket(UdpClient client, PacketType packetType)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            var receiveTask = client.ReceiveAsync();
+            var completed = await Task.WhenAny(receiveTask, Task.Delay(100));
+            if (completed != receiveTask) continue;
+
+            var result = await receiveTask;
+            if (result.Buffer.Length > 0 && PacketPeek.GetType(result.Buffer) == packetType)
+                return;
+        }
+
+        throw new TimeoutException($"Timed out waiting for {packetType}.");
     }
 
     private static int GetAvailableUdpPort()
