@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using RadioRelay.Client.Networking;
@@ -92,14 +93,25 @@ namespace RadioRelay.Client.AudioEngineNs
     {
         public const int SampleRate = 16000;
         private static readonly WaveFormat Format = new(SampleRate, 16, 1);
+        private static readonly WaveFormat PassthroughFormat =
+            WaveFormat.CreateIeeeFloatWaveFormat(PassthroughOutputSampleRate, 2);
         private const int FrameSize = OpusCodec.FrameSize; // 320 samples = 20ms
+        internal const int MicrophoneCaptureBufferMilliseconds = 20;
+        internal const int MicTestPrebufferMilliseconds = 200;
+        private const int MicTestBufferDurationMilliseconds = 500;
+        internal const int PassthroughOutputSampleRate = 48000;
+        internal const int PassthroughOutputLatencyMilliseconds = 20;
+        private const int PassthroughBufferDurationMilliseconds = 500;
         internal const int TransmissionEndRedundantPacketCount = 3;
         internal static readonly TimeSpan StaleRemoteActivityFallbackTimeout = TimeSpan.FromMilliseconds(500);
 
         private WaveInEvent? _waveIn;
         private WaveOutEvent? _waveOut;
+        private WasapiOut? _passthroughWasapiOut;
+        private MMDevice? _passthroughDevice;
         private int _inputDeviceIndex;
         private int _outputDeviceIndex;
+        private string? _passthroughDeviceId;
         private readonly MixingSampleProvider _mixer; // stereo
         private readonly Dictionary<RadioChannel, (BufferedWaveProvider buffer, VolumeSampleProvider vol, PanningSampleProvider pan)> _channelBuffers = new();
         private readonly Dictionary<RadioChannel, JitterBuffer> _jitterBuffers = new();
@@ -108,10 +120,21 @@ namespace RadioRelay.Client.AudioEngineNs
         private readonly Dictionary<RadioChannel, TxState> _txState = new();
         private readonly Dictionary<RadioChannel, (RadioBand band, RadioEffectProfile profile)> _txProfiles = new();
         private readonly BufferedWaveProvider _systemSoundBuffer;
+        private readonly BufferedWaveProvider _micTestBuffer;
+        private readonly BufferedWaveProvider _passthroughBuffer;
+        private readonly LocalRadioPassthroughProcessor _passthroughProcessor = new();
+        private readonly LocalPassthroughOutputConverter _passthroughOutputConverter = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<byte[]> _micCaptureQueue = new();
+        private readonly System.Threading.AutoResetEvent _micCaptureSignal = new(false);
+        private readonly object _micProcessingGate = new();
+        private System.Threading.Thread? _micProcessingThread;
+        private volatile bool _micProcessingStopping;
+        private bool _disposed;
         private readonly SecureAudioCodec _secureCodec;
         private readonly System.Threading.Timer _jitterTicker;
         private readonly object _stateLock = new();
         private long _transmissionLifecycleSequence;
+        private bool _isMicTestActive;
 
         public List<RadioChannel> Channels { get; }
 
@@ -122,6 +145,24 @@ namespace RadioRelay.Client.AudioEngineNs
         /// Linear gain applied to the microphone signal before the
         /// radio DSP effect and Opus encoding. 1.0 = unity. Settable live.
         public float InputGain { get; set; } = 1.0f;
+
+        public bool IsMicTestActive
+        {
+            get
+            {
+                lock (_stateLock)
+                    return _isMicTestActive;
+            }
+        }
+
+        public string? PassthroughDeviceId
+        {
+            get
+            {
+                lock (_stateLock)
+                    return _passthroughDeviceId;
+            }
+        }
 
         /// Volume, 0..1, of the click you hear yourself when you key
         /// or release your own PTT (independent of any radio's listen
@@ -177,6 +218,23 @@ namespace RadioRelay.Client.AudioEngineNs
             };
             _mixer.AddMixerInput(new PanningSampleProvider(_systemSoundBuffer.ToSampleProvider()) { Pan = 0f });
 
+            // Raw local microphone monitor used by the Test Mic button. It is
+            // mixed directly to the selected output and never enters the
+            // transmit, radio-effect, encryption, or relay paths.
+            _micTestBuffer = new BufferedWaveProvider(Format)
+            {
+                DiscardOnBufferOverflow = true,
+                BufferDuration = TimeSpan.FromMilliseconds(MicTestBufferDurationMilliseconds)
+            };
+            _mixer.AddMixerInput(new PanningSampleProvider(_micTestBuffer.ToSampleProvider()) { Pan = 0f });
+
+            _passthroughBuffer = new BufferedWaveProvider(PassthroughFormat)
+            {
+                DiscardOnBufferOverflow = true,
+                ReadFully = true,
+                BufferDuration = TimeSpan.FromMilliseconds(PassthroughBufferDurationMilliseconds)
+            };
+
             foreach (var ch in channels)
             {
                 AddChannelBuffer(ch);
@@ -188,6 +246,7 @@ namespace RadioRelay.Client.AudioEngineNs
 
             if (startAudioDevices)
             {
+                StartMicProcessingThread();
                 _waveOut = new WaveOutEvent { DeviceNumber = _outputDeviceIndex };
                 _waveOut.Init(_mixer);
                 _waveOut.Play();
@@ -196,7 +255,7 @@ namespace RadioRelay.Client.AudioEngineNs
                 {
                     DeviceNumber = _inputDeviceIndex,
                     WaveFormat = Format,
-                    BufferMilliseconds = 40
+                    BufferMilliseconds = MicrophoneCaptureBufferMilliseconds
                 };
                 _waveIn.DataAvailable += OnMicDataAvailable;
                 _waveIn.StartRecording();
@@ -229,7 +288,7 @@ namespace RadioRelay.Client.AudioEngineNs
                 {
                     DeviceNumber = _inputDeviceIndex,
                     WaveFormat = Format,
-                    BufferMilliseconds = 40
+                    BufferMilliseconds = MicrophoneCaptureBufferMilliseconds
                 };
                 _waveIn.DataAvailable += OnMicDataAvailable;
                 _waveIn.StartRecording();
@@ -256,6 +315,79 @@ namespace RadioRelay.Client.AudioEngineNs
                 _waveOut.Init(_mixer);
                 _waveOut.Play();
 
+            }
+        }
+
+        public void SetMicTestActive(bool active)
+        {
+            lock (_stateLock)
+            {
+                if (_isMicTestActive == active) return;
+                _isMicTestActive = active;
+                lock (_micTestBuffer)
+                {
+                    _micTestBuffer.ClearBuffer();
+                    if (active)
+                    {
+                        // WaveOutEvent commonly requests a block larger than a
+                        // single 40 ms capture callback. Prime the monitor so
+                        // those reads do not alternate between mic audio and
+                        // zero-filled underflow.
+                        var prebuffer = new byte[SampleRate * 2 * MicTestPrebufferMilliseconds / 1000];
+                        _micTestBuffer.AddSamples(prebuffer, 0, prebuffer.Length);
+                    }
+                }
+            }
+        }
+
+        /// Selects the playback endpoint feeding a virtual audio cable.
+        /// Null disables passthrough and is the persisted/default state.
+        public void SetPassthroughDevice(string? deviceId)
+        {
+            lock (_stateLock)
+            {
+                if (string.Equals(deviceId, _passthroughDeviceId, StringComparison.Ordinal) &&
+                    (deviceId == null || _passthroughWasapiOut != null))
+                {
+                    return;
+                }
+
+                _passthroughWasapiOut?.Stop();
+                _passthroughWasapiOut?.Dispose();
+                _passthroughWasapiOut = null;
+                _passthroughDevice?.Dispose();
+                _passthroughDevice = null;
+                _passthroughDeviceId = null;
+                _passthroughProcessor.Reset();
+                _passthroughOutputConverter.Reset();
+                lock (_passthroughBuffer)
+                    _passthroughBuffer.ClearBuffer();
+
+                if (deviceId == null) return;
+
+                using var enumerator = new MMDeviceEnumerator();
+                var device = enumerator.GetDevice(deviceId);
+                var output = new WasapiOut(
+                    device,
+                    AudioClientShareMode.Shared,
+                    useEventSync: true,
+                    latency: PassthroughOutputLatencyMilliseconds);
+                try
+                {
+                    output.Init(_passthroughBuffer);
+                    output.Play();
+                    _passthroughDevice = device;
+                    _passthroughWasapiOut = output;
+                    _passthroughDeviceId = deviceId;
+                    if (_txState.Values.Any(state => state.IsActive))
+                        ResetPassthroughBufferForTransmission();
+                }
+                catch
+                {
+                    output.Dispose();
+                    device.Dispose();
+                    throw;
+                }
             }
         }
 
@@ -380,58 +512,84 @@ namespace RadioRelay.Client.AudioEngineNs
         /// other radios' transmit state is unaffected.
         public void SetTransmitting(RadioChannel channel, bool active)
         {
-            lock (_stateLock)
+            if (!active)
             {
-                if (!_txState.TryGetValue(channel, out var state)) return;
-                if (active && !RadioReceiveMute.CanStartTransmission(channel.Volume)) return;
-                if (active == state.IsActive) return;
-                state.IsActive = active;
-
-                if (_rxState.TryGetValue(channel, out var rxState))
+                // Finish blocks captured while PTT was still held before
+                // queuing the local end cue or network end marker. This is a
+                // drain of work already captured, not a fixed audio delay.
+                lock (_micProcessingGate)
                 {
-                    rxState.TalkOver.SetLocalTransmitting(active);
-                    if (active)
-                    {
-                        // Local TX should mute/clear the audible receive path, but
-                        // it must NOT close the RX HUD. RX is remote activity on
-                        // the frequency, and the operator needs to keep seeing who
-                        // else is transmitting while they are talking over them.
-                        if (_jitterBuffers.TryGetValue(channel, out var jitter))
-                            jitter.Reset();
-                        if (_channelBuffers.TryGetValue(channel, out var receiveEntry))
-                            receiveEntry.buffer.ClearBuffer();
-                        rxState.IsReceivingActive = false;
-                        rxState.PendingRemoteClientId = "";
-                        rxState.PendingRemoteCallsign = "";
-                        rxState.HasAudibleReceiveInFlight = false;
-                        rxState.Interference.Reset();
-                        rxState.CollisionDestruction.Reset();
-                    }
-                    else
-                    {
-                        if (_sidetoneBuffers.TryGetValue(channel, out var sidetone))
-                            ClearLocalTalkOverWarning(rxState, sidetone.buffer);
-                        else
-                            rxState.TalkOverWarningCue.Reset();
-                    }
+                    DrainMicCaptureQueue();
+                    lock (_stateLock)
+                        SetTransmittingLocked(channel, false);
                 }
+                return;
+            }
 
-                PlayLocalSidetone(channel, active ? SoundLibrary.TxStart : SoundLibrary.TxEnd);
+            lock (_stateLock)
+                SetTransmittingLocked(channel, true);
+        }
 
-                if (!active)
+        private void SetTransmittingLocked(RadioChannel channel, bool active)
+        {
+            if (!_txState.TryGetValue(channel, out var state)) return;
+            if (active && !RadioReceiveMute.CanStartTransmission(channel.Volume)) return;
+            if (active == state.IsActive) return;
+            bool hadActiveTransmitter = _txState.Values.Any(tx => tx.IsActive);
+            state.IsActive = active;
+            bool hasActiveTransmitter = _txState.Values.Any(tx => tx.IsActive);
+
+            if (active && !hadActiveTransmitter)
+                ResetPassthroughBufferForTransmission();
+            else if (!active && !hasActiveTransmitter)
+            {
+                _passthroughProcessor.Reset();
+                _passthroughOutputConverter.Reset();
+            }
+
+            if (_rxState.TryGetValue(channel, out var rxState))
+            {
+                rxState.TalkOver.SetLocalTransmitting(active);
+                if (active)
                 {
-                    state.Accumulator.Clear();
-                    foreach (var packet in CreateTransmissionEndPackets(channel, state.Sequence, Callsign))
-                        RaiseAudioCaptured(new CapturedAudioEventArgs { Packet = packet });
-                    RaiseTransmissionEnded(new TransmissionEventArgs { Channel = channel, IsLocalTransmit = true, LifecycleSequence = NextTransmissionLifecycleSequence() });
+                    // Local TX should mute/clear the audible receive path, but
+                    // it must NOT close the RX HUD. RX is remote activity on
+                    // the frequency, and the operator needs to keep seeing who
+                    // else is transmitting while they are talking over them.
+                    if (_jitterBuffers.TryGetValue(channel, out var jitter))
+                        jitter.Reset();
+                    if (_channelBuffers.TryGetValue(channel, out var receiveEntry))
+                        receiveEntry.buffer.ClearBuffer();
+                    rxState.IsReceivingActive = false;
+                    rxState.PendingRemoteClientId = "";
+                    rxState.PendingRemoteCallsign = "";
+                    rxState.HasAudibleReceiveInFlight = false;
+                    rxState.Interference.Reset();
+                    rxState.CollisionDestruction.Reset();
                 }
                 else
                 {
-                    state.Sequence = 0;
-                    state.Accumulator.Clear();
-                    RaiseTransmissionStarted(new TransmissionEventArgs { Channel = channel, IsLocalTransmit = true, RemoteCallsign = Callsign, LifecycleSequence = NextTransmissionLifecycleSequence() });
+                    if (_sidetoneBuffers.TryGetValue(channel, out var sidetone))
+                        ClearLocalTalkOverWarning(rxState, sidetone.buffer);
+                    else
+                        rxState.TalkOverWarningCue.Reset();
                 }
+            }
 
+            PlayLocalSidetone(channel, active ? SoundLibrary.TxStart : SoundLibrary.TxEnd);
+
+            if (!active)
+            {
+                state.Accumulator.Clear();
+                foreach (var packet in CreateTransmissionEndPackets(channel, state.Sequence, Callsign))
+                    RaiseAudioCaptured(new CapturedAudioEventArgs { Packet = packet });
+                RaiseTransmissionEnded(new TransmissionEventArgs { Channel = channel, IsLocalTransmit = true, LifecycleSequence = NextTransmissionLifecycleSequence() });
+            }
+            else
+            {
+                state.Sequence = 0;
+                state.Accumulator.Clear();
+                RaiseTransmissionStarted(new TransmissionEventArgs { Channel = channel, IsLocalTransmit = true, RemoteCallsign = Callsign, LifecycleSequence = NextTransmissionLifecycleSequence() });
             }
         }
 
@@ -505,14 +663,69 @@ namespace RadioRelay.Client.AudioEngineNs
 
         private void OnMicDataAvailable(object? sender, WaveInEventArgs e)
         {
-            RunBackgroundCallback(() => ProcessMicDataAvailable(e));
+            // Return the WinMM capture callback immediately. Radio DSP,
+            // duplicate Opus work for passthrough, and network subscribers
+            // must not delay re-queuing the capture buffer or Windows will
+            // create regular holes between otherwise valid mic blocks.
+            var capturedPcm = new byte[e.BytesRecorded];
+            Buffer.BlockCopy(e.Buffer, 0, capturedPcm, 0, capturedPcm.Length);
+            lock (_micProcessingGate)
+            {
+                if (_micProcessingStopping) return;
+                _micCaptureQueue.Enqueue(capturedPcm);
+                _micCaptureSignal.Set();
+            }
         }
 
-        private void ProcessMicDataAvailable(WaveInEventArgs e)
+        private void StartMicProcessingThread()
+        {
+            if (_micProcessingThread != null) return;
+            _micProcessingStopping = false;
+            _micProcessingThread = new System.Threading.Thread(ProcessMicCaptureQueue)
+            {
+                IsBackground = true,
+                Name = "RadioRelay microphone processor",
+                Priority = System.Threading.ThreadPriority.AboveNormal
+            };
+            _micProcessingThread.Start();
+        }
+
+        private void ProcessMicCaptureQueue()
+        {
+            while (!_micProcessingStopping)
+            {
+                _micCaptureSignal.WaitOne();
+                lock (_micProcessingGate)
+                    DrainMicCaptureQueue();
+            }
+        }
+
+        private void DrainMicCaptureQueue()
+        {
+            while (!_micProcessingStopping && _micCaptureQueue.TryDequeue(out var capturedPcm))
+                RunBackgroundCallback(() => ProcessMicDataAvailable(capturedPcm));
+        }
+
+        private void ProcessMicDataAvailable(byte[] capturedPcm)
         {
             lock (_stateLock)
             {
-                int sampleCount = e.BytesRecorded / 2;
+                int sampleCount = capturedPcm.Length / 2;
+
+                if (_isMicTestActive)
+                {
+                    var monitorPcm = CreateMicTestPcm(capturedPcm, capturedPcm.Length, InputGain);
+                    lock (_micTestBuffer)
+                    {
+                        // Keep the primed queue intact. DiscardOnBufferOverflow
+                        // bounds latency if an output device stalls; clearing at
+                        // normal callback depths would create audible gating.
+                        _micTestBuffer.AddSamples(monitorPcm, 0, monitorPcm.Length);
+                    }
+                }
+
+                List<List<(RadioChannel Channel, byte[] OpusPayload)>>? passthroughFrames =
+                    _passthroughWasapiOut == null ? null : new();
 
                 foreach (var kvp in _txState)
                 {
@@ -521,22 +734,42 @@ namespace RadioRelay.Client.AudioEngineNs
                     if (!state.IsActive) continue;
 
                     for (int i = 0; i < sampleCount; i++)
-                        state.Accumulator.Add(BitConverter.ToInt16(e.Buffer, i * 2));
+                        state.Accumulator.Add(BitConverter.ToInt16(capturedPcm, i * 2));
 
-                    // WaveInEvent buffers rarely align exactly to 320 samples, so we
+                    // Capture buffers do not have to align exactly to 320 samples, so we
                     // accumulate and slice out exact 20ms Opus frames as they become available.
+                    int frameOrdinal = 0;
                     while (state.Accumulator.Count >= FrameSize)
                     {
                         var frame = state.Accumulator.GetRange(0, FrameSize).ToArray();
                         state.Accumulator.RemoveRange(0, FrameSize);
-                        SendFrame(channel, state, frame);
+                        var encoded = SendFrame(channel, state, frame);
+
+                        if (passthroughFrames != null)
+                        {
+                            while (passthroughFrames.Count <= frameOrdinal)
+                                passthroughFrames.Add(new List<(RadioChannel, byte[])>());
+                            passthroughFrames[frameOrdinal].Add((channel, encoded.OpusPayload));
+                        }
+                        frameOrdinal++;
+                    }
+                }
+
+                if (passthroughFrames != null)
+                {
+                    foreach (var encodedFrames in passthroughFrames)
+                    {
+                        var receivedStereo = _passthroughProcessor.Process(encodedFrames);
+                        var passthroughPcm = _passthroughOutputConverter.Convert(receivedStereo);
+                        lock (_passthroughBuffer)
+                            _passthroughBuffer.AddSamples(passthroughPcm, 0, passthroughPcm.Length);
                     }
                 }
 
             }
         }
 
-        private void SendFrame(RadioChannel txChannel, TxState state, short[] frame)
+        private EncodedFrame SendFrame(RadioChannel txChannel, TxState state, short[] frame)
         {
             var floatSamples = new float[FrameSize];
             for (int i = 0; i < FrameSize; i++)
@@ -578,6 +811,34 @@ namespace RadioRelay.Client.AudioEngineNs
                     Payload = encoded.Payload
                 }
             });
+
+            return encoded;
+        }
+
+        internal static byte[] CreateMicTestPcm(byte[] capturedPcm, int bytesRecorded, float inputGain)
+        {
+            int safeByteCount = Math.Clamp(bytesRecorded, 0, capturedPcm.Length) & ~1;
+            var monitoredPcm = new byte[safeByteCount];
+            for (int offset = 0; offset < safeByteCount; offset += 2)
+            {
+                short sample = unchecked((short)(capturedPcm[offset] | (capturedPcm[offset + 1] << 8)));
+                short scaled = (short)Math.Clamp(
+                    Math.Round(sample * Math.Max(0f, inputGain)),
+                    short.MinValue,
+                    short.MaxValue);
+                monitoredPcm[offset] = unchecked((byte)scaled);
+                monitoredPcm[offset + 1] = unchecked((byte)(scaled >> 8));
+            }
+
+            return monitoredPcm;
+        }
+
+        private void ResetPassthroughBufferForTransmission()
+        {
+            if (_passthroughWasapiOut == null) return;
+
+            lock (_passthroughBuffer)
+                _passthroughBuffer.ClearBuffer();
         }
 
         /// Called by the networking layer when an audio packet arrives from another client.
@@ -1042,16 +1303,11 @@ namespace RadioRelay.Client.AudioEngineNs
                     if (rxState.IsReceivingActive)
                     {
                         var profile = GetRxProfile(ch, rxState);
-                        var frame = new float[FrameSize];
-
-                        if (result.Pcm != null)
-                        {
-                            for (int i = 0; i < FrameSize && i < result.Pcm.Length; i++)
-                                frame[i] = result.Pcm[i] / 32768f;
-                            profile.RxEffect.Process(frame);
-                        }
-
-                        MixInBandNoise(ch, rxState, profile, frame);
+                        var frame = RadioReceiveFrameProcessor.Process(
+                            result.Pcm,
+                            ch,
+                            profile,
+                            ref rxState.NoiseLoopPosition);
                         MixCoChannelInterference(ch, rxState, frame);
 
                         var bytes = FloatsToPcm(frame);
@@ -1107,29 +1363,6 @@ namespace RadioRelay.Client.AudioEngineNs
                 }
 
             }
-        }
-
-        /// Mixes the next slice of that band's looping recorded
-        /// static bed into the frame at the profile's tuned noise level,
-        /// advancing (and wrapping) a per-channel read cursor so consecutive
-        /// transmissions continue from wherever the loop last left off
-        /// rather than restarting identically every time.
-        private void MixInBandNoise(RadioChannel channel, RxState rxState, RadioEffectProfile profile, float[] frame)
-        {
-            if (channel.IsIntercom) return; // no band static on a clean intercom
-
-            var band = RadioBandExtensions.FromFrequencyMHz(channel.Frequency);
-            var loop = SoundLibrary.GetBandNoiseLoop(band);
-            if (loop.Length == 0) return;
-
-            int pos = rxState.NoiseLoopPosition;
-            for (int i = 0; i < frame.Length; i++)
-            {
-                frame[i] = Math.Clamp(frame[i] + loop[pos] * profile.NoiseGainLinear, -1f, 1f);
-                pos++;
-                if (pos >= loop.Length) pos = 0;
-            }
-            rxState.NoiseLoopPosition = pos;
         }
 
         /// Destructively damages the captured signal while another
@@ -1219,17 +1452,44 @@ namespace RadioRelay.Client.AudioEngineNs
 
         public void Dispose()
         {
+            System.Threading.Thread? micProcessingThread;
             lock (_stateLock)
             {
+                if (_disposed) return;
+                _disposed = true;
                 _jitterTicker.Dispose();
+                if (_waveIn != null)
+                    _waveIn.DataAvailable -= OnMicDataAvailable;
                 _waveIn?.StopRecording();
                 _waveIn?.Dispose();
                 _waveIn = null;
+                _micProcessingStopping = true;
+                while (_micCaptureQueue.TryDequeue(out _)) { }
+                _micCaptureSignal.Set();
+                micProcessingThread = _micProcessingThread;
+                _micProcessingThread = null;
+                _isMicTestActive = false;
+                lock (_micTestBuffer)
+                    _micTestBuffer.ClearBuffer();
                 _waveOut?.Stop();
                 _waveOut?.Dispose();
                 _waveOut = null;
+                _passthroughWasapiOut?.Stop();
+                _passthroughWasapiOut?.Dispose();
+                _passthroughWasapiOut = null;
+                _passthroughDevice?.Dispose();
+                _passthroughDevice = null;
+                _passthroughDeviceId = null;
+                _passthroughProcessor.Reset();
+                _passthroughOutputConverter.Reset();
+                lock (_passthroughBuffer)
+                    _passthroughBuffer.ClearBuffer();
 
             }
+
+            if (micProcessingThread != null && micProcessingThread != System.Threading.Thread.CurrentThread)
+                micProcessingThread.Join(TimeSpan.FromSeconds(1));
+            _micCaptureSignal.Dispose();
         }
     }
 }

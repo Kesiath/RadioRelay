@@ -35,6 +35,8 @@ public class AppSettingsImportExportTests
             ControlLockEnabled = true,
             InputDeviceIndex = 2,
             OutputDeviceIndex = 3,
+            PassthroughDeviceId = "{render-endpoint}",
+            PassthroughDeviceIndex = 6,
             InputGain = 1.4f,
             InputClickVolume = 0.25f,
             TalkOverWarningVolume = 0.35f,
@@ -90,6 +92,8 @@ public class AppSettingsImportExportTests
         Assert.False(root.TryGetProperty("ControlLockEnabled", out _));
         Assert.False(root.TryGetProperty("InputDeviceIndex", out _));
         Assert.False(root.TryGetProperty("OutputDeviceIndex", out _));
+        Assert.False(root.TryGetProperty("PassthroughDeviceId", out _));
+        Assert.False(root.TryGetProperty("PassthroughDeviceIndex", out _));
         Assert.False(root.TryGetProperty("InputGain", out _));
         Assert.False(root.TryGetProperty("InputClickVolume", out _));
         Assert.False(root.TryGetProperty("TalkOverWarningVolume", out _));
@@ -166,6 +170,8 @@ public class AppSettingsImportExportTests
             ControlLockEnabled = true,
             InputDeviceIndex = 4,
             OutputDeviceIndex = 5,
+            PassthroughDeviceId = "{local-render-endpoint}",
+            PassthroughDeviceIndex = 6,
             InputGain = 1.6f,
             InputClickVolume = 0.2f,
             TalkOverWarningVolume = 0.3f,
@@ -195,6 +201,8 @@ public class AppSettingsImportExportTests
             Callsign = "ImportedPilot",
             InputDeviceIndex = 99,
             OutputDeviceIndex = 98,
+            PassthroughDeviceId = "{imported-render-endpoint}",
+            PassthroughDeviceIndex = 97,
             InputGain = 0.1f,
             Radios = new List<RadioSettings>
             {
@@ -223,6 +231,8 @@ public class AppSettingsImportExportTests
         Assert.True(local.ControlLockEnabled);
         Assert.Equal(4, local.InputDeviceIndex);
         Assert.Equal(5, local.OutputDeviceIndex);
+        Assert.Equal("{local-render-endpoint}", local.PassthroughDeviceId);
+        Assert.Equal(6, local.PassthroughDeviceIndex);
         Assert.Equal(1.6f, local.InputGain);
         Assert.Equal(0.2f, local.InputClickVolume);
         Assert.Equal(0.3f, local.TalkOverWarningVolume);
