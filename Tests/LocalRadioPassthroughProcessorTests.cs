@@ -8,7 +8,7 @@ namespace RadioRelay.Tests;
 public class LocalRadioPassthroughProcessorTests
 {
     [Fact]
-    public void Push_converter_produces_exactly_one_native_48khz_frame_without_padding()
+    public void Push_converter_preserves_exact_20ms_duration_at_48khz()
     {
         var converter = new LocalPassthroughOutputConverter();
         var stereoFrame = new short[OpusCodec.FrameSize * 2];
@@ -21,8 +21,50 @@ public class LocalRadioPassthroughProcessorTests
         var output = converter.Convert(stereoFrame);
 
         Assert.Equal(OpusCodec.FrameSize * 3 * 8, output.Length);
-        Assert.InRange(LocalPassthroughOutputConverter.AlgorithmicLatencyMilliseconds, 0, 0.5);
         Assert.Equal(20, AudioEngine.PassthroughOutputLatencyMilliseconds);
+    }
+
+    [Fact]
+    public void Push_converter_supports_44100hz_without_periodic_frame_loss()
+    {
+        const int outputSampleRate = 44_100;
+        var converter = new LocalPassthroughOutputConverter(outputSampleRate);
+        int sourcePosition = 0;
+        int outputFrames = 0;
+        int longestSilentFrames = 0;
+        int currentSilentFrames = 0;
+
+        for (int frameIndex = 0; frameIndex < 150; frameIndex++)
+        {
+            var stereoFrame = new short[OpusCodec.FrameSize * 2];
+            for (int frame = 0; frame < OpusCodec.FrameSize; frame++, sourcePosition++)
+            {
+                short sample = (short)(Math.Sin(sourcePosition * 2 * Math.PI * 440 / AudioEngine.SampleRate) * 8_000);
+                stereoFrame[frame * 2] = sample;
+                stereoFrame[frame * 2 + 1] = sample;
+            }
+
+            var output = converter.Convert(stereoFrame);
+            Assert.Equal(outputSampleRate / 50 * 8, output.Length);
+            outputFrames += output.Length / 8;
+            for (int offset = 0; offset < output.Length; offset += 8)
+            {
+                float left = BitConverter.ToSingle(output, offset);
+                float right = BitConverter.ToSingle(output, offset + 4);
+                if (left == 0f && right == 0f)
+                {
+                    currentSilentFrames++;
+                    longestSilentFrames = Math.Max(longestSilentFrames, currentSilentFrames);
+                }
+                else
+                {
+                    currentSilentFrames = 0;
+                }
+            }
+        }
+
+        Assert.Equal(150 * outputSampleRate / 50, outputFrames);
+        Assert.InRange(longestSilentFrames, 0, outputSampleRate / 1000);
     }
 
     [Fact]

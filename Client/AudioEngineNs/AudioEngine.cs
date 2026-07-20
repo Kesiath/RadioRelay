@@ -136,8 +136,6 @@ namespace RadioRelay.Client.AudioEngineNs
     {
         public const int SampleRate = 16000;
         private static readonly WaveFormat Format = new(SampleRate, 16, 1);
-        private static readonly WaveFormat PassthroughFormat =
-            WaveFormat.CreateIeeeFloatWaveFormat(PassthroughOutputSampleRate, 2);
         private const int FrameSize = OpusCodec.FrameSize; // 20 ms at 16 kHz.
         internal const int MicrophoneCaptureBufferMilliseconds = 20;
         internal const int MicTestPrebufferMilliseconds = 200;
@@ -173,7 +171,7 @@ namespace RadioRelay.Client.AudioEngineNs
         private readonly Dictionary<RadioChannel, (RadioBand band, bool isIntercom, RadioEffectProfile profile)> _txProfiles = new();
         private readonly BufferedWaveProvider _systemSoundBuffer;
         private readonly BufferedWaveProvider _micTestBuffer;
-        private readonly BufferedWaveProvider _passthroughBuffer;
+        private BufferedWaveProvider _passthroughBuffer;
         private readonly LocalRadioPassthroughProcessor _passthroughProcessor = new();
         private readonly LocalPassthroughOutputConverter _passthroughOutputConverter = new();
         private readonly System.Collections.Concurrent.ConcurrentQueue<CapturedMicrophoneBuffer> _micCaptureQueue = new();
@@ -293,12 +291,7 @@ namespace RadioRelay.Client.AudioEngineNs
             };
             _mixer.AddMixerInput(new PanningSampleProvider(_micTestBuffer.ToSampleProvider()) { Pan = 0f });
 
-            _passthroughBuffer = new BufferedWaveProvider(PassthroughFormat)
-            {
-                DiscardOnBufferOverflow = true,
-                ReadFully = true,
-                BufferDuration = TimeSpan.FromMilliseconds(PassthroughBufferDurationMilliseconds)
-            };
+            _passthroughBuffer = CreatePassthroughBuffer(PassthroughOutputSampleRate);
 
             foreach (var ch in channels)
             {
@@ -428,6 +421,9 @@ namespace RadioRelay.Client.AudioEngineNs
 
                 using var enumerator = new MMDeviceEnumerator();
                 var device = enumerator.GetDevice(deviceId);
+                int outputSampleRate = device.AudioClient.MixFormat.SampleRate;
+                _passthroughOutputConverter.SetOutputSampleRate(outputSampleRate);
+                _passthroughBuffer = CreatePassthroughBuffer(outputSampleRate);
                 var output = new WasapiOut(
                     device,
                     AudioClientShareMode.Shared,
@@ -487,6 +483,14 @@ namespace RadioRelay.Client.AudioEngineNs
             DesiredLatency = MainOutputLatencyMilliseconds,
             NumberOfBuffers = MainOutputBufferCount
         };
+
+        private static BufferedWaveProvider CreatePassthroughBuffer(int sampleRate) =>
+            new(WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, 2))
+            {
+                DiscardOnBufferOverflow = true,
+                ReadFully = true,
+                BufferDuration = TimeSpan.FromMilliseconds(PassthroughBufferDurationMilliseconds)
+            };
 
         /// <summary>
         /// Applies a radio output-channel change immediately.
