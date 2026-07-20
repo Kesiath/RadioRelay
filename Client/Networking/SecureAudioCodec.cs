@@ -9,6 +9,9 @@ namespace RadioRelay.Client.Networking
     public class EncodedFrame
     {
         public byte[] Payload = Array.Empty<byte>(); // Opus bytes, ciphertext if Encrypted
+        // Exact pre-encryption Opus packet used for local receive-equivalent
+        // passthrough. This is never serialized or sent separately.
+        public byte[] OpusPayload = Array.Empty<byte>();
         public byte[] NetIdHash = new byte[8];
         public bool IsEncrypted;
         public byte[]? Nonce;
@@ -34,7 +37,13 @@ namespace RadioRelay.Client.Networking
 
             if (net.IsUnencrypted)
             {
-                return new EncodedFrame { Payload = opusBytes, NetIdHash = new byte[8], IsEncrypted = false };
+                return new EncodedFrame
+                {
+                    Payload = opusBytes,
+                    OpusPayload = opusBytes,
+                    NetIdHash = new byte[8],
+                    IsEncrypted = false
+                };
             }
 
             string keyStr = Convert.ToBase64String(net.Key!);
@@ -50,6 +59,7 @@ namespace RadioRelay.Client.Networking
             return new EncodedFrame
             {
                 Payload = ciphertext,
+                OpusPayload = opusBytes,
                 NetIdHash = net.NetIdHash,
                 IsEncrypted = true,
                 Nonce = nonce,

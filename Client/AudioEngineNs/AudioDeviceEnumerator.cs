@@ -35,6 +35,27 @@ namespace RadioRelay.Client.AudioEngineNs
             return list;
         }
 
+        /// Stable Core Audio render endpoint IDs for event-driven WASAPI
+        /// outputs such as the recording passthrough. WinMM indices are not
+        /// interchangeable with WASAPI endpoints and can change order.
+        public static List<(string Id, string Name)> GetOutputEndpoints()
+        {
+            try
+            {
+                using var enumerator = new MMDeviceEnumerator();
+                return enumerator
+                    .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                    .Select(device => (device.ID, device.FriendlyName))
+                    .Where(device => !string.IsNullOrWhiteSpace(device.ID) &&
+                        !string.IsNullOrWhiteSpace(device.FriendlyName))
+                    .ToList();
+            }
+            catch
+            {
+                return new List<(string, string)>();
+            }
+        }
+
         private static List<string> GetCoreAudioNames(DataFlow flow)
         {
             try

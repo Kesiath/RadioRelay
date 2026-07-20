@@ -82,6 +82,12 @@ namespace RadioRelay.Client
 
         public int InputDeviceIndex { get; set; } = -1;
         public int OutputDeviceIndex { get; set; } = -1;
+        // Stable Core Audio render endpoint feeding a virtual cable; null
+        // means disabled. Machine-local and omitted from operational exports.
+        public string? PassthroughDeviceId { get; set; }
+        // Legacy 1.6.3 preview setting. Retained only so an existing settings
+        // file can be loaded; new selections use the stable endpoint ID.
+        public int? PassthroughDeviceIndex { get; set; }
         public float InputGain { get; set; } = 1.0f;
         public float InputClickVolume { get; set; } = 1.0f;
         public float TalkOverWarningVolume { get; set; } = 1.0f;

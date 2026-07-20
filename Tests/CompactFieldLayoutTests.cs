@@ -108,6 +108,37 @@ public class CompactFieldLayoutTests
     }
 
     [Fact]
+    public void Device_row_places_mic_test_between_input_and_output()
+    {
+        using var callsign = new TextBox();
+        using var input = new DarkComboBox();
+        using var testMic = new ModernButton { Text = "Test Mic" };
+        using var output = new DarkComboBox();
+        using var passthrough = new DarkComboBox();
+        var method = typeof(MainForm).GetMethod("CreateDeviceRow", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
+            null,
+            new object[] { callsign, input, testMic, output, passthrough }));
+
+        row.Size = new Size(724, 48);
+        row.CreateControl();
+        row.PerformLayout();
+
+        var inputField = row.GetControlFromPosition(2, 0);
+        var outputField = row.GetControlFromPosition(6, 0);
+        var passthroughField = row.GetControlFromPosition(8, 0);
+        Assert.NotNull(inputField);
+        Assert.NotNull(outputField);
+        Assert.NotNull(passthroughField);
+        Assert.True(inputField!.Right < testMic.Left);
+        Assert.True(testMic.Right < outputField!.Left);
+        Assert.True(outputField.Right < passthroughField!.Left);
+        Assert.Equal(16, testMic.Margin.Top);
+        Assert.Equal(32, testMic.Height);
+    }
+
+    [Fact]
     public void Radio_header_moves_metadata_left_and_distributes_it_evenly()
     {
         var method = typeof(MainForm).GetMethod("CreateRadioHeaderRow", BindingFlags.Static | BindingFlags.NonPublic);

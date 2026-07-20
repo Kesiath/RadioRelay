@@ -142,6 +142,8 @@ namespace RadioRelay.Client
 
         private readonly DarkComboBox _inputDeviceBox = new() { DropDownWidth = 360 };
         private readonly DarkComboBox _outputDeviceBox = new() { DropDownWidth = 360 };
+        private readonly DarkComboBox _passthroughDeviceBox = new() { DropDownWidth = 360 };
+        private readonly ModernButton _testMicButton = new() { Text = "Test Mic" };
         private readonly ModernSlider _inputGainSlider = new() { Minimum = 0, Maximum = 300, Value = 100 };
         private readonly ModernSlider _inputClickVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
         private readonly ModernSlider _talkOverVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
@@ -834,12 +836,17 @@ namespace RadioRelay.Client
             return row;
         }
 
-        private static TableLayoutPanel CreateDeviceRow(TextBox callsignBox, DarkComboBox inputDeviceBox, DarkComboBox outputDeviceBox)
+        private static TableLayoutPanel CreateDeviceRow(
+            TextBox callsignBox,
+            DarkComboBox inputDeviceBox,
+            Button testMicButton,
+            DarkComboBox outputDeviceBox,
+            DarkComboBox passthroughDeviceBox)
         {
             var row = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 5,
+                ColumnCount = 9,
                 RowCount = 1,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
@@ -847,13 +854,23 @@ namespace RadioRelay.Client
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 140));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.334f));
+
+            testMicButton.Height = 32;
+            testMicButton.Dock = DockStyle.Fill;
+            testMicButton.Margin = new Padding(0, FieldCaptionHeight, 0, 0);
 
             row.Controls.Add(CreateCompactField("Callsign", callsignBox, 140), 0, 0);
             row.Controls.Add(CreateFillField("Input", inputDeviceBox), 2, 0);
-            row.Controls.Add(CreateFillField("Output", outputDeviceBox), 4, 0);
+            row.Controls.Add(testMicButton, 4, 0);
+            row.Controls.Add(CreateFillField("Output", outputDeviceBox), 6, 0);
+            row.Controls.Add(CreateFillField("Passthrough", passthroughDeviceBox), 8, 0);
             return row;
         }
 
@@ -1253,6 +1270,8 @@ namespace RadioRelay.Client
             StyleField(_callsignBox);
             StyleField(_inputDeviceBox);
             StyleField(_outputDeviceBox);
+            StyleField(_passthroughDeviceBox);
+            StyleButton(_testMicButton);
             _hudLayoutButton.Text = "Customize HUD";
             StyleButton(_hudLayoutButton);
             StyleButton(_icpBindingButton);
@@ -1263,8 +1282,12 @@ namespace RadioRelay.Client
 
             foreach (var (index, name) in AudioDeviceEnumerator.GetInputDevices())
                 _inputDeviceBox.Items.Add(new DeviceItem(index, name));
-            foreach (var (index, name) in AudioDeviceEnumerator.GetOutputDevices())
+            var outputDevices = AudioDeviceEnumerator.GetOutputDevices();
+            foreach (var (index, name) in outputDevices)
                 _outputDeviceBox.Items.Add(new DeviceItem(index, name));
+            _passthroughDeviceBox.Items.Add(new EndpointItem(null, "Disabled"));
+            foreach (var (id, name) in AudioDeviceEnumerator.GetOutputEndpoints())
+                _passthroughDeviceBox.Items.Add(new EndpointItem(id, name));
 
             // ---- Connection, identity, devices, and audio levels ----
             var topCard = new ModernCard
@@ -1285,7 +1308,12 @@ namespace RadioRelay.Client
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             topCard.Controls.Add(CreateSectionHeader("Settings", "server / identity / devices"), 0, 0);
             topCard.Controls.Add(CreateServerRow(_serverBox, _portBox, _serverPasswordBox, _connectButton, _serverUserCountLabel, _statusLabel, _versionLabel), 0, 1);
-            topCard.Controls.Add(CreateDeviceRow(_callsignBox, _inputDeviceBox, _outputDeviceBox), 0, 2);
+            topCard.Controls.Add(CreateDeviceRow(
+                _callsignBox,
+                _inputDeviceBox,
+                _testMicButton,
+                _outputDeviceBox,
+                _passthroughDeviceBox), 0, 2);
             topCard.Controls.Add(CreateTopSliderPairRow(_inputGainSlider, _inputClickVolSlider, "Input gain", "TX click"), 0, 3);
             topCard.Controls.Add(CreateTopSliderPairRow(_outputClickVolSlider, _talkOverVolSlider, "RX click", "Talkover"), 0, 4);
             AddPageRow(topCard, 10);
@@ -1631,12 +1659,16 @@ namespace RadioRelay.Client
 
             _inputDeviceBox.SelectedIndexChanged += (_, _) =>
             {
+                SetMicTestActive(false);
                 if (_inputDeviceBox.SelectedItem is DeviceItem item) _audioEngine?.SetInputDevice(item.Index);
             };
             _outputDeviceBox.SelectedIndexChanged += (_, _) =>
             {
+                SetMicTestActive(false);
                 if (_outputDeviceBox.SelectedItem is DeviceItem item) _audioEngine?.SetOutputDevice(item.Index);
             };
+            _testMicButton.Click += (_, _) => SetMicTestActive(_audioEngine?.IsMicTestActive != true);
+            _passthroughDeviceBox.SelectedIndexChanged += (_, _) => ApplySelectedPassthroughDevice();
             _inputGainSlider.ValueChanged += (_, _) =>
             {
                 if (_audioEngine != null) _audioEngine.InputGain = _inputGainSlider.Value / 100f;
@@ -1807,8 +1839,10 @@ namespace RadioRelay.Client
 
             SelectDeviceItem(_inputDeviceBox, _settings.InputDeviceIndex);
             SelectDeviceItem(_outputDeviceBox, _settings.OutputDeviceIndex);
+            SelectEndpointItem(_passthroughDeviceBox, _settings.PassthroughDeviceId);
             _audioEngine?.SetInputDevice(_settings.InputDeviceIndex);
             _audioEngine?.SetOutputDevice(_settings.OutputDeviceIndex);
+            ApplySelectedPassthroughDevice();
 
             _inputGainSlider.Value = Math.Clamp((int)Math.Round(_settings.InputGain * 100), _inputGainSlider.Minimum, _inputGainSlider.Maximum);
             _inputClickVolSlider.Value = Math.Clamp((int)Math.Round(_settings.InputClickVolume * 100), 0, 100);
@@ -1849,6 +1883,38 @@ namespace RadioRelay.Client
                 if (obj is DeviceItem item && item.Index == deviceIndex) { box.SelectedItem = item; return; }
             }
             if (box.Items.Count > 0) box.SelectedIndex = 0;
+        }
+
+        private static void SelectEndpointItem(DarkComboBox box, string? endpointId)
+        {
+            foreach (var obj in box.Items)
+            {
+                if (obj is EndpointItem item &&
+                    string.Equals(item.Id, endpointId, StringComparison.Ordinal))
+                {
+                    box.SelectedItem = item;
+                    return;
+                }
+            }
+            if (box.Items.Count > 0) box.SelectedIndex = 0;
+        }
+
+        private void ApplySelectedPassthroughDevice()
+        {
+            string? deviceId = _passthroughDeviceBox.SelectedItem is EndpointItem item
+                ? item.Id
+                : null;
+
+            try
+            {
+                _audioEngine?.SetPassthroughDevice(deviceId);
+            }
+            catch (Exception ex)
+            {
+                LogSafe($"Passthrough device failed: {ex.Message}");
+                SelectEndpointItem(_passthroughDeviceBox, null);
+                _audioEngine?.SetPassthroughDevice(null);
+            }
         }
 
         private void ApplySavedPttBindings()
@@ -1920,6 +1986,10 @@ namespace RadioRelay.Client
 
             _settings.InputDeviceIndex = _inputDeviceBox.SelectedItem is DeviceItem inItem ? inItem.Index : -1;
             _settings.OutputDeviceIndex = _outputDeviceBox.SelectedItem is DeviceItem outItem ? outItem.Index : -1;
+            _settings.PassthroughDeviceId = _passthroughDeviceBox.SelectedItem is EndpointItem passthroughItem
+                ? passthroughItem.Id
+                : null;
+            _settings.PassthroughDeviceIndex = null;
             _settings.InputGain = _inputGainSlider.Value / 100f;
             _settings.InputClickVolume = _inputClickVolSlider.Value / 100f;
             _settings.TalkOverWarningVolume = _talkOverVolSlider.Value / 100f;
@@ -2071,6 +2141,7 @@ namespace RadioRelay.Client
         private void OnPttDown(RadioChannel channel)
         {
             if (!RadioReceiveMute.CanStartTransmission(channel.Volume)) return;
+            SetMicTestActive(false);
 
             if (_pttReleaseTimers.TryGetValue(channel, out var existing))
             {
@@ -2078,6 +2149,28 @@ namespace RadioRelay.Client
                 _pttReleaseTimers.Remove(channel);
             }
             _audioEngine?.SetTransmitting(channel, true);
+        }
+
+        private void SetMicTestActive(bool active)
+        {
+            _audioEngine?.SetMicTestActive(active);
+            if (InvokeRequired)
+            {
+                PostToUi(UpdateMicTestButton);
+                return;
+            }
+
+            UpdateMicTestButton();
+        }
+
+        private void UpdateMicTestButton()
+        {
+            bool isActive = _audioEngine?.IsMicTestActive == true;
+            _testMicButton.Text = isActive ? "Stop Mic" : "Test Mic";
+            _testMicButton.Emphasized = isActive;
+            _testMicButton.BackColor = isActive ? Theme.AccentBlue : Theme.RaisedBackground;
+            _testMicButton.ForeColor = isActive ? Color.White : Theme.Text;
+            _testMicButton.Invalidate();
         }
 
         private void CancelPttReleaseTimer(RadioChannel channel)
@@ -2429,6 +2522,14 @@ namespace RadioRelay.Client
             public readonly int Index;
             public readonly string Name;
             public DeviceItem(int index, string name) { Index = index; Name = name; }
+            public override string ToString() => Name;
+        }
+
+        private readonly struct EndpointItem
+        {
+            public readonly string? Id;
+            public readonly string Name;
+            public EndpointItem(string? id, string name) { Id = id; Name = name; }
             public override string ToString() => Name;
         }
     }
