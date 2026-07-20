@@ -10,6 +10,19 @@ namespace RadioRelay.Tests;
 public class AudioIntegrationHardeningTests
 {
     [Fact]
+    public void Main_output_keeps_at_least_50ms_per_driver_buffer()
+    {
+        var factory = typeof(AudioEngine).GetMethod(
+            "CreateMainWaveOut",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!;
+        using var output = Assert.IsType<NAudio.Wave.WaveOutEvent>(factory.Invoke(null, new object[] { -1 }));
+
+        Assert.Equal(AudioEngine.MainOutputLatencyMilliseconds, output.DesiredLatency);
+        Assert.Equal(AudioEngine.MainOutputBufferCount, output.NumberOfBuffers);
+        Assert.True(output.DesiredLatency / output.NumberOfBuffers >= 50);
+    }
+
+    [Fact]
     public void Same_client_transmission_epochs_remain_independent_in_interference_tracking()
     {
         var clientId = Guid.NewGuid();

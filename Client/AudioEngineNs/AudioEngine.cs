@@ -142,7 +142,7 @@ namespace RadioRelay.Client.AudioEngineNs
         private const int MicTestBufferDurationMilliseconds = 500;
         internal const int PassthroughOutputSampleRate = 48000;
         internal const int PassthroughOutputLatencyMilliseconds = 20;
-        internal const int MainOutputLatencyMilliseconds = 60;
+        internal const int MainOutputLatencyMilliseconds = 150;
         internal const int MainOutputBufferCount = 3;
         private const int PassthroughBufferDurationMilliseconds = 100;
         internal const int PassthroughMaximumLiveBacklogMilliseconds = 60;
