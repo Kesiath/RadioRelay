@@ -1253,7 +1253,8 @@ namespace RadioRelay.Client
 
             foreach (var (index, name) in AudioDeviceEnumerator.GetInputDevices())
                 _inputDeviceBox.Items.Add(new DeviceItem(index, name));
-            foreach (var (index, name) in AudioDeviceEnumerator.GetOutputDevices())
+            var outputDevices = AudioDeviceEnumerator.GetOutputDevices();
+            foreach (var (index, name) in outputDevices)
                 _outputDeviceBox.Items.Add(new DeviceItem(index, name));
             _passthroughDeviceBox.Items.Add(new EndpointItem(null, "Disabled"));
             foreach (var (id, name) in AudioDeviceEnumerator.GetOutputEndpoints())
