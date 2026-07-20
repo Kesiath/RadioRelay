@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 using RadioRelay.Client.Networking;
 using RadioRelay.Client.Radio;
 using RadioRelay.Shared.Audio;
 using RadioRelay.Shared.Protocol;
+using RadioRelay.Shared.Security;
 
 namespace RadioRelay.Client.AudioEngineNs
 {
@@ -15,150 +18,255 @@ namespace RadioRelay.Client.AudioEngineNs
         public AudioPacket Packet = new();
     }
 
-    /// Raised whenever a transmission actually starts/ends playing
-    /// out (received audio) or actually starts/ends being sent (local
-    /// transmit), so the UI can drive the on-screen transmission HUD off
-    /// real audio activity rather than raw packet timing.
+    /// <summary>
+    /// Describes a local TX or remote RX lifecycle transition.
+    /// </summary>
     public class TransmissionEventArgs : EventArgs
     {
         public required RadioChannel Channel { get; init; }
-        public required bool IsLocalTransmit { get; init; } // true = we're sending, false = we're receiving
+        public required bool IsLocalTransmit { get; init; }
         public string RemoteCallsign { get; init; } = "";
         public string RemoteClientId { get; init; } = "";
         public long LifecycleSequence { get; init; }
     }
 
-    /// Per-channel transmit state: each radio has its own PTT, its
-    /// own passcode-derived net, and its own sequence/PCM accumulation, so
-    /// multiple radios can be keyed independently (even simultaneously).
+    /// <summary>
+    /// Stores mutable state for one keyed radio transmission.
+    /// </summary>
     internal class TxState
     {
         public bool IsActive;
+        public bool IsNetworkEpochAdvertised;
         public ushort Sequence;
+        public int MediaFramesSent;
+        public uint TransmissionAudioSeed;
+        public ulong TransmissionId;
+        public float Frequency;
+        public string RadioName = "";
+        public string SenderName = "";
+        public NetOption Net = NetOption.Unencrypted;
+        public RadioBand Band;
+        public bool IsIntercom;
+        public RadioEar Ear;
+        public RadioEffectProfile? Profile;
         public readonly List<short> Accumulator = new();
     }
 
-    /// Per-channel receive state used to know when a looping
-    /// band-noise bed should be playing underneath decoded voice, and to
-    /// track simple FM-style co-channel interference: the first audible
-    /// sender captures the receiver while later overlapping audible senders
-    /// add interference noise rather than playing a standalone local squelch
-    /// cue or taking over the jitter stream mid-transmission.
+    internal readonly record struct PendingRemoteFrame(
+        ushort Sequence,
+        byte[] OpusPayload,
+        bool IsStart,
+        bool IsEnd);
+
+    internal readonly record struct PendingRemoteEnd(
+        ushort Sequence,
+        byte[] OpusPayload,
+        DateTime ExpiresUtc);
+
+    internal sealed class PendingReceiveHandoff
+    {
+        private const int MaxFrames = 128;
+        private readonly HashSet<ushort> _sequences = new();
+
+        public required RadioTransmissionKey Transmission { get; init; }
+        public required string Callsign { get; init; }
+        public required uint AudioSeed { get; init; }
+        public required float ReceiverOffsetMHz { get; init; }
+        public List<PendingRemoteFrame> Frames { get; } = new();
+
+        public void Add(PendingRemoteFrame frame)
+        {
+            if (frame.OpusPayload.Length == 0 || _sequences.Add(frame.Sequence))
+            {
+                if (Frames.Count < MaxFrames)
+                    Frames.Add(frame);
+            }
+        }
+    }
+
+    internal readonly record struct PreparedTransmitFrame(
+        EncodedFrame Encoded,
+        AudioPacket? NetworkPacket);
+
+    internal readonly record struct CapturedMicrophoneBuffer(
+        byte[] Pcm,
+        long Generation);
+
+    /// <summary>
+    /// Stores receive DSP, carrier arbitration, lifecycle, and HUD state for one channel.
+    /// </summary>
     internal class RxState
     {
         public bool IsReceivingActive;
-        public int NoiseLoopPosition;
+        public RadioNoiseGenerator Noise { get; } = new();
+        public ReceiverDetuningEffect Detuning { get; } = new();
         public RadioInterferenceTracker Interference { get; } = new();
         public RadioTalkOverMonitor TalkOver { get; } = new();
         public LoopingAudioCue TalkOverWarningCue { get; } = new(SoundLibrary.Collision);
         public RadioCollisionDestructionModel CollisionDestruction { get; } = new(AudioEngine.SampleRate);
         public RadioBand CachedBand;
+        public bool CachedIsIntercom;
         public RadioEffectProfile? CachedProfile;
 
-        // UI/HUD receive state is tracked separately from the low-level
-        // jitter/interference state so every remote TransmissionStarted we
-        // raise has exactly one matching TransmissionEnded, even when an
-        // overlapping co-channel sender is rejected by the capture model.
+        // Track HUD lifecycle separately so every start receives one matching end.
         public bool IsReceiveHudActive => ActiveRemoteHudByClient.Count > 0;
         public string ActiveRemoteClientId = "";
         public string ActiveRemoteCallsign = "";
         public readonly Dictionary<string, string> ActiveRemoteHudByClient = new();
         public string PendingRemoteClientId = "";
         public string PendingRemoteCallsign = "";
+        public string ActiveAudibleTransmissionHudId = "";
+        public uint PendingTransmissionAudioSeed;
+        public float PendingReceiverOffsetMHz;
         public bool HasAudibleReceiveInFlight;
         public DateTime? LastRemotePacketUtc;
         public readonly Dictionary<Guid, DateTime> LastRemotePacketUtcByClient = new();
+        public readonly Dictionary<RadioTransmissionKey, DateTime> LastRemotePacketUtcByTransmission = new();
+        public readonly Dictionary<RadioTransmissionKey, DateTime> RecentlyEndedRemoteTransmissions = new();
+        public readonly Dictionary<RadioTransmissionKey, PendingRemoteEnd> PendingEarlyEnds = new();
+        public readonly List<PendingReceiveHandoff> PendingHandoffs = new();
+        public bool IsAudibleTransmissionTerminalPending;
     }
 
-    /// 
-    /// Owns the microphone input and speaker output. Pipeline on transmit:
-    /// mic PCM -> tunable per-band DSP effect chain (highpass/peak/lowpass
-    /// filters, saturation, sidechain compression, gain -- structured after
-    /// the DCS-SRS effect-graph schema) -> optional cosmetic CVSD
-    /// "encrypted radio" character -> Opus encode -> optional AES-GCM
-    /// encrypt -> AudioPacket, done independently per currently-keyed radio.
-    /// Pipeline on receive: decrypt -> jitter buffer (which itself
-    /// Opus-decodes on a steady 20ms clock) -> per-band rxEffect -> looping
-    /// recorded band-noise bed mixed underneath while actively receiving ->
-    /// per-channel volume -> stereo pan (left/right/both, per that radio's
-    /// Ear setting) -> mixed stereo output. Key clicks and
-    /// connect/disconnect beeps are recorded assets (see SoundLibrary).
-    /// Co-channel radio interference is modeled as capture-effect
-    /// arbitration plus destructive sample damage for listeners, while local
-    /// transmitters hear a continuous talk-over warning cue for the duration
-    /// of overlap.
-    /// 
+    /// <summary>
+    /// Captures microphone audio, applies radio DSP, Opus, and encryption, then
+    /// receives, dejitters, processes, routes, and mixes remote audio.
+    /// </summary>
     public class AudioEngine : IDisposable
     {
         public const int SampleRate = 16000;
         private static readonly WaveFormat Format = new(SampleRate, 16, 1);
-        private const int FrameSize = OpusCodec.FrameSize; // 320 samples = 20ms
+        private static readonly WaveFormat PassthroughFormat =
+            WaveFormat.CreateIeeeFloatWaveFormat(PassthroughOutputSampleRate, 2);
+        private const int FrameSize = OpusCodec.FrameSize; // 20 ms at 16 kHz.
+        internal const int MicrophoneCaptureBufferMilliseconds = 20;
+        internal const int MicTestPrebufferMilliseconds = 200;
+        private const int MicTestBufferDurationMilliseconds = 500;
+        internal const int PassthroughOutputSampleRate = 48000;
+        internal const int PassthroughOutputLatencyMilliseconds = 20;
+        internal const int MainOutputLatencyMilliseconds = 60;
+        internal const int MainOutputBufferCount = 3;
+        private const int PassthroughBufferDurationMilliseconds = 100;
+        internal const int PassthroughMaximumLiveBacklogMilliseconds = 60;
+        internal const int MaxQueuedMicrophoneBuffers = 4;
         internal const int TransmissionEndRedundantPacketCount = 3;
+        internal const int TransmissionStartRedundantFrameCount = 3;
         internal static readonly TimeSpan StaleRemoteActivityFallbackTimeout = TimeSpan.FromMilliseconds(500);
+        internal static readonly TimeSpan LateRemoteMediaGracePeriod = TimeSpan.FromSeconds(2);
+        private const int MaxRecentlyEndedRemoteTransmissions = 512;
+        private const int MaxPendingReceiveHandoffs = 8;
 
         private WaveInEvent? _waveIn;
         private WaveOutEvent? _waveOut;
+        private WasapiOut? _passthroughWasapiOut;
+        private MMDevice? _passthroughDevice;
         private int _inputDeviceIndex;
         private int _outputDeviceIndex;
-        private readonly MixingSampleProvider _mixer; // stereo
+        private string? _passthroughDeviceId;
+        private readonly MixingSampleProvider _mixer; // Stereo output mix.
+        private readonly SoftLimiterSampleProvider _outputLimiter;
         private readonly Dictionary<RadioChannel, (BufferedWaveProvider buffer, VolumeSampleProvider vol, PanningSampleProvider pan)> _channelBuffers = new();
         private readonly Dictionary<RadioChannel, JitterBuffer> _jitterBuffers = new();
         private readonly Dictionary<RadioChannel, RxState> _rxState = new();
         private readonly Dictionary<RadioChannel, (BufferedWaveProvider buffer, PanningSampleProvider pan)> _sidetoneBuffers = new();
         private readonly Dictionary<RadioChannel, TxState> _txState = new();
-        private readonly Dictionary<RadioChannel, (RadioBand band, RadioEffectProfile profile)> _txProfiles = new();
+        private readonly Dictionary<RadioChannel, (RadioBand band, bool isIntercom, RadioEffectProfile profile)> _txProfiles = new();
         private readonly BufferedWaveProvider _systemSoundBuffer;
+        private readonly BufferedWaveProvider _micTestBuffer;
+        private readonly BufferedWaveProvider _passthroughBuffer;
+        private readonly LocalRadioPassthroughProcessor _passthroughProcessor = new();
+        private readonly LocalPassthroughOutputConverter _passthroughOutputConverter = new();
+        private readonly System.Collections.Concurrent.ConcurrentQueue<CapturedMicrophoneBuffer> _micCaptureQueue = new();
+        private int _micCaptureQueueCount;
+        private readonly object _micCaptureProducerLock = new();
+        private long _micCaptureGeneration;
+        private readonly System.Threading.AutoResetEvent _micCaptureSignal = new(false);
+        private readonly object _micProcessingGate = new();
+        private System.Threading.Thread? _micProcessingThread;
+        private volatile bool _micProcessingStopping;
+        private bool _disposed;
         private readonly SecureAudioCodec _secureCodec;
         private readonly System.Threading.Timer _jitterTicker;
         private readonly object _stateLock = new();
         private long _transmissionLifecycleSequence;
+        private bool _isMicTestActive;
+        private bool _networkAdvertisingEnabled;
 
         public List<RadioChannel> Channels { get; }
+        public Guid ClientId { get; }
 
-        /// The user's self-assigned callsign, stamped onto every
-        /// packet this engine sends. Settable live -- no login required.
+        /// <summary>
+        /// Callsign stamped onto outgoing audio packets.
+        /// </summary>
         public string Callsign { get; set; } = "";
 
-        /// Linear gain applied to the microphone signal before the
-        /// radio DSP effect and Opus encoding. 1.0 = unity. Settable live.
+        /// <summary>
+        /// Linear microphone gain applied before radio DSP and encoding.
+        /// </summary>
         public float InputGain { get; set; } = 1.0f;
 
-        /// Volume, 0..1, of the click you hear yourself when you key
-        /// or release your own PTT (independent of any radio's listen
-        /// Volume -- you should still hear your own key click even if you've
-        /// turned a radio's listen volume down).
+        public bool IsMicTestActive
+        {
+            get
+            {
+                lock (_stateLock)
+                    return _isMicTestActive;
+            }
+        }
+
+        public string? PassthroughDeviceId
+        {
+            get
+            {
+                lock (_stateLock)
+                    return _passthroughDeviceId;
+            }
+        }
+
+        /// <summary>
+        /// Local PTT key and release cue volume from zero to one.
+        /// </summary>
         public float InputClickVolume { get; set; } = 1.0f;
 
-        /// Volume, 0..1, of the continuous talk-over warning squelch
-        /// played only to a local transmitter while another audible station
-        /// overlaps this radio. Deliberately separate from TX click volume so
-        /// disabling key-clicks cannot make the radio receive while transmitting.
+        /// <summary>
+        /// Local talk-over warning volume from zero to one.
+        /// </summary>
         public float TalkOverWarningVolume { get; set; } = 1.0f;
 
-        /// Volume, 0..1, of the click played when a received
-        /// transmission starts/ends. Multiplies on top of that radio's own
-        /// listen Volume, same as the voice audio itself.
+        /// <summary>
+        /// Remote transmission cue volume from zero to one.
+        /// </summary>
         public float OutputClickVolume { get; set; } = 1.0f;
 
-        private const float AppVolumeBoost = 3.0f;
+        private const float AppVolumeBoost = 1.0f;
+        private const float FilteredReceiveStartCueGain = 3.5f;
+        private const float FilteredReceiveEndCueGain = 1.4f;
 
         private static float BoostVolume(float volume)
         {
             return Math.Max(0f, volume * AppVolumeBoost);
         }
 
+        /// <summary>
         /// Raised whenever a fully-encoded (and possibly encrypted) packet is ready to send.
+        /// </summary>
         public event EventHandler<CapturedAudioEventArgs>? AudioCaptured;
 
-        /// Raised when a transmission (local or remote) actually
-        /// starts or stops producing audible audio -- drives the on-screen
-        /// transmission HUD.
+        /// <summary>
+        /// Raised when local TX or remote RX becomes active or inactive.
+        /// </summary>
         public event EventHandler<TransmissionEventArgs>? TransmissionStarted;
         public event EventHandler<TransmissionEventArgs>? TransmissionEnded;
 
-        public AudioEngine(List<RadioChannel> channels, int micDeviceIndex = -1, int speakerDeviceIndex = -1, bool startAudioDevices = true)
+        public AudioEngine(
+            List<RadioChannel> channels,
+            int micDeviceIndex = -1,
+            int speakerDeviceIndex = -1,
+            bool startAudioDevices = true,
+            Guid clientId = default)
         {
             Channels = channels;
+            ClientId = clientId;
             _secureCodec = new SecureAudioCodec(SampleRate);
             _inputDeviceIndex = micDeviceIndex;
             _outputDeviceIndex = speakerDeviceIndex;
@@ -167,15 +275,30 @@ namespace RadioRelay.Client.AudioEngineNs
             {
                 ReadFully = true
             };
+            _outputLimiter = new SoftLimiterSampleProvider(_mixer);
 
-            // Long enough to comfortably hold the longest connect/disconnect
-            // beep (~6s) added in a single one-shot AddSamples call.
+            // Hold the longest system cue added in one operation.
             _systemSoundBuffer = new BufferedWaveProvider(Format)
             {
                 DiscardOnBufferOverflow = true,
                 BufferDuration = TimeSpan.FromSeconds(10)
             };
             _mixer.AddMixerInput(new PanningSampleProvider(_systemSoundBuffer.ToSampleProvider()) { Pan = 0f });
+
+            // Route the raw mic test directly to the selected output.
+            _micTestBuffer = new BufferedWaveProvider(Format)
+            {
+                DiscardOnBufferOverflow = true,
+                BufferDuration = TimeSpan.FromMilliseconds(MicTestBufferDurationMilliseconds)
+            };
+            _mixer.AddMixerInput(new PanningSampleProvider(_micTestBuffer.ToSampleProvider()) { Pan = 0f });
+
+            _passthroughBuffer = new BufferedWaveProvider(PassthroughFormat)
+            {
+                DiscardOnBufferOverflow = true,
+                ReadFully = true,
+                BufferDuration = TimeSpan.FromMilliseconds(PassthroughBufferDurationMilliseconds)
+            };
 
             foreach (var ch in channels)
             {
@@ -188,30 +311,28 @@ namespace RadioRelay.Client.AudioEngineNs
 
             if (startAudioDevices)
             {
-                _waveOut = new WaveOutEvent { DeviceNumber = _outputDeviceIndex };
-                _waveOut.Init(_mixer);
+                StartMicProcessingThread();
+                _waveOut = CreateMainWaveOut(_outputDeviceIndex);
+                _waveOut.Init(_outputLimiter);
                 _waveOut.Play();
 
                 _waveIn = new WaveInEvent
                 {
                     DeviceNumber = _inputDeviceIndex,
                     WaveFormat = Format,
-                    BufferMilliseconds = 40
+                    BufferMilliseconds = MicrophoneCaptureBufferMilliseconds
                 };
                 _waveIn.DataAvailable += OnMicDataAvailable;
                 _waveIn.StartRecording();
             }
 
-            // Drives playout for every channel's jitter buffer at a steady
-            // cadence matching the Opus frame size, independent of however
-            // bursty/irregular network arrival actually is.
+            // Tick every jitter buffer at the Opus frame cadence.
             _jitterTicker = new System.Threading.Timer(_ => RunBackgroundCallback(TickJitterBuffers), null, 20, 20);
         }
 
-        /// Switches the microphone device live, without needing to
-        /// reconnect or lose any radio/PTT/encryption state. deviceIndex
-        /// values come from AudioDeviceEnumerator.GetInputDevices() (-1 =
-        /// system default).
+        /// <summary>
+        /// Switches the microphone device; -1 selects the system default.
+        /// </summary>
         public void SetInputDevice(int deviceIndex)
         {
             lock (_stateLock)
@@ -229,7 +350,7 @@ namespace RadioRelay.Client.AudioEngineNs
                 {
                     DeviceNumber = _inputDeviceIndex,
                     WaveFormat = Format,
-                    BufferMilliseconds = 40
+                    BufferMilliseconds = MicrophoneCaptureBufferMilliseconds
                 };
                 _waveIn.DataAvailable += OnMicDataAvailable;
                 _waveIn.StartRecording();
@@ -237,9 +358,9 @@ namespace RadioRelay.Client.AudioEngineNs
             }
         }
 
-        /// Switches the speaker/output device live. deviceIndex
-        /// values come from AudioDeviceEnumerator.GetOutputDevices() (-1 =
-        /// system default).
+        /// <summary>
+        /// Switches the speaker device; -1 selects the system default.
+        /// </summary>
         public void SetOutputDevice(int deviceIndex)
         {
             lock (_stateLock)
@@ -252,10 +373,82 @@ namespace RadioRelay.Client.AudioEngineNs
                 oldWaveOut.Stop();
                 oldWaveOut.Dispose();
 
-                _waveOut = new WaveOutEvent { DeviceNumber = _outputDeviceIndex };
-                _waveOut.Init(_mixer);
+                _waveOut = CreateMainWaveOut(_outputDeviceIndex);
+                _waveOut.Init(_outputLimiter);
                 _waveOut.Play();
 
+            }
+        }
+
+        public void SetMicTestActive(bool active)
+        {
+            lock (_stateLock)
+            {
+                if (_isMicTestActive == active) return;
+                _isMicTestActive = active;
+                lock (_micTestBuffer)
+                {
+                    _micTestBuffer.ClearBuffer();
+                    if (active)
+                    {
+                        // Prime the monitor to prevent alternating audio and underflow.
+                        var prebuffer = new byte[SampleRate * 2 * MicTestPrebufferMilliseconds / 1000];
+                        _micTestBuffer.AddSamples(prebuffer, 0, prebuffer.Length);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Selects the playback endpoint feeding a virtual audio cable.
+        /// Null disables passthrough and is the persisted/default state.
+        /// </summary>
+        public void SetPassthroughDevice(string? deviceId)
+        {
+            lock (_stateLock)
+            {
+                if (string.Equals(deviceId, _passthroughDeviceId, StringComparison.Ordinal) &&
+                    (deviceId == null || _passthroughWasapiOut != null))
+                {
+                    return;
+                }
+
+                _passthroughWasapiOut?.Stop();
+                _passthroughWasapiOut?.Dispose();
+                _passthroughWasapiOut = null;
+                _passthroughDevice?.Dispose();
+                _passthroughDevice = null;
+                _passthroughDeviceId = null;
+                _passthroughProcessor.Reset();
+                _passthroughOutputConverter.Reset();
+                lock (_passthroughBuffer)
+                    _passthroughBuffer.ClearBuffer();
+
+                if (deviceId == null) return;
+
+                using var enumerator = new MMDeviceEnumerator();
+                var device = enumerator.GetDevice(deviceId);
+                var output = new WasapiOut(
+                    device,
+                    AudioClientShareMode.Shared,
+                    useEventSync: true,
+                    latency: PassthroughOutputLatencyMilliseconds);
+                try
+                {
+                    output.Init(_passthroughBuffer);
+                    output.Play();
+                    _passthroughDevice = device;
+                    _passthroughWasapiOut = output;
+                    _passthroughDeviceId = deviceId;
+                    if (_txState.Values.Any(state => state.IsActive))
+                        ResetPassthroughBufferForTransmission();
+                }
+                catch
+                {
+                    output.Dispose();
+                    device.Dispose();
+                    throw;
+                }
             }
         }
 
@@ -274,11 +467,7 @@ namespace RadioRelay.Client.AudioEngineNs
 
         private void AddSidetoneBuffer(RadioChannel channel)
         {
-            // Deliberately NOT routed through that channel's Volume (a
-            // "listen" volume of 0 shouldn't also silence your own
-            // confirmation click that you're transmitting) -- but it IS
-            // routed through that channel's Ear/pan setting, so your own
-            // click plays on the same side as everything else for that radio.
+            // TX cues bypass receive volume but follow the radio's output channel.
             var buffer = new BufferedWaveProvider(Format) { DiscardOnBufferOverflow = true };
             var pan = new PanningSampleProvider(buffer.ToSampleProvider()) { Pan = EarToPan(channel.Ear) };
             _sidetoneBuffers[channel] = (buffer, pan);
@@ -292,9 +481,16 @@ namespace RadioRelay.Client.AudioEngineNs
             _ => 0f
         };
 
-        /// Call immediately when a radio's Ear selection changes, so
-        /// both its received audio and its own sidetone click re-pan right
-        /// away rather than waiting for the next received packet.
+        private static WaveOutEvent CreateMainWaveOut(int deviceIndex) => new()
+        {
+            DeviceNumber = deviceIndex,
+            DesiredLatency = MainOutputLatencyMilliseconds,
+            NumberOfBuffers = MainOutputBufferCount
+        };
+
+        /// <summary>
+        /// Applies a radio output-channel change immediately.
+        /// </summary>
         public void UpdateChannelEar(RadioChannel channel)
         {
             lock (_stateLock)
@@ -307,10 +503,13 @@ namespace RadioRelay.Client.AudioEngineNs
             }
         }
 
+        /// <summary>
         /// Applies a listen-volume change immediately. Zero is a true receiver-off
         /// state: queued audio and receive lifecycle/HUD state are discarded.
+        /// </summary>
         public void UpdateChannelVolume(RadioChannel channel)
         {
+            bool stopTransmitting = false;
             lock (_stateLock)
             {
                 if (_channelBuffers.TryGetValue(channel, out var entry))
@@ -326,7 +525,93 @@ namespace RadioRelay.Client.AudioEngineNs
                     _txState.TryGetValue(channel, out var txState) &&
                     txState.IsActive)
                 {
-                    SetTransmitting(channel, false);
+                    stopTransmitting = true;
+                }
+            }
+
+            // Preserve microphone-gate then state-lock ordering.
+            if (stopTransmitting)
+                SetTransmitting(channel, false);
+        }
+
+        /// <summary>
+        /// Applies tuning changes as an RF boundary and restarts any active TX epoch.
+        /// </summary>
+        public void OnChannelTuningChanged(RadioChannel channel)
+        {
+            lock (_micProcessingGate)
+            {
+                long completedCaptureGeneration = AdvanceMicCaptureGeneration();
+                DrainMicCaptureQueue(completedCaptureGeneration);
+                lock (_stateLock)
+                {
+                    _txProfiles.Remove(channel);
+                    if (_rxState.TryGetValue(channel, out var rxState))
+                    {
+                        DisableChannelReceive(channel, rxState);
+                        rxState.CachedProfile = null;
+                        rxState.Noise.Reset();
+                    }
+
+                    if (!_txState.TryGetValue(channel, out var state) || !state.IsActive)
+                        return;
+
+                    bool wasAdvertised = state.IsNetworkEpochAdvertised;
+                    FlushPartialTransmitFrameLocked(channel, state, wasAdvertised);
+                    if (wasAdvertised)
+                        EmitTransmissionEndsLocked(state);
+                    _secureCodec.EndTransmitStream(state.TransmissionId);
+                    BeginTransmitEpochLocked(channel, state, wasAdvertised);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Ends all advertised PTT epochs and suppresses network audio until restart.
+        /// </summary>
+        public void SendActiveTransmissionEnds()
+        {
+            lock (_micProcessingGate)
+            {
+                long completedCaptureGeneration = AdvanceMicCaptureGeneration();
+                DrainMicCaptureQueue(completedCaptureGeneration);
+                lock (_stateLock)
+                {
+                    _networkAdvertisingEnabled = false;
+                    foreach (var entry in _txState)
+                    {
+                        var state = entry.Value;
+                        if (!state.IsActive || !state.IsNetworkEpochAdvertised) continue;
+
+                        FlushPartialTransmitFrameLocked(entry.Key, state, emitNetwork: true);
+                        EmitTransmissionEndsLocked(state);
+                        state.IsNetworkEpochAdvertised = false;
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Restarts held PTTs with fresh epochs after network recovery.
+        /// </summary>
+        public void RestartActiveTransmissionStreams()
+        {
+            lock (_micProcessingGate)
+            {
+                long completedCaptureGeneration = AdvanceMicCaptureGeneration();
+                DrainMicCaptureQueue(completedCaptureGeneration);
+                lock (_stateLock)
+                {
+                    _networkAdvertisingEnabled = true;
+                    foreach (var entry in _txState)
+                    {
+                        var state = entry.Value;
+                        if (!state.IsActive) continue;
+
+                        FlushPartialTransmitFrameLocked(entry.Key, state, emitNetwork: false);
+                        _secureCodec.EndTransmitStream(state.TransmissionId);
+                        BeginTransmitEpochLocked(entry.Key, state, advertiseOnNetwork: true);
+                    }
                 }
             }
         }
@@ -339,9 +624,17 @@ namespace RadioRelay.Client.AudioEngineNs
             rxState.IsReceivingActive = false;
             rxState.PendingRemoteClientId = "";
             rxState.PendingRemoteCallsign = "";
+            rxState.ActiveAudibleTransmissionHudId = "";
+            rxState.PendingTransmissionAudioSeed = 0;
+            rxState.PendingReceiverOffsetMHz = 0f;
             rxState.HasAudibleReceiveInFlight = false;
             rxState.LastRemotePacketUtc = null;
             rxState.LastRemotePacketUtcByClient.Clear();
+            rxState.LastRemotePacketUtcByTransmission.Clear();
+            rxState.RecentlyEndedRemoteTransmissions.Clear();
+            rxState.PendingEarlyEnds.Clear();
+            rxState.PendingHandoffs.Clear();
+            rxState.IsAudibleTransmissionTerminalPending = false;
             rxState.TalkOver.ClearRemoteTransmitters();
             rxState.TalkOverWarningCue.Reset();
             rxState.Interference.Reset();
@@ -350,88 +643,211 @@ namespace RadioRelay.Client.AudioEngineNs
                 RaiseRemoteTransmissionEnded(channel, remoteCallsign, remoteClientId));
         }
 
-        /// Gets (rebuilding if the channel's band has changed since
-        /// last time) the tunable txEffect/rxEffect/noise profile for
-        /// whatever band this channel's frequency currently falls in.
+        /// <summary>
+        /// Gets or rebuilds the channel's band-specific effect profile.
+        /// </summary>
         private RadioEffectProfile GetTxProfile(RadioChannel channel)
         {
             var band = RadioBandExtensions.FromFrequencyMHz(channel.Frequency);
-            if (_txProfiles.TryGetValue(channel, out var cached) && cached.band == band)
+            if (_txProfiles.TryGetValue(channel, out var cached) &&
+                cached.band == band &&
+                cached.isIntercom == channel.IsIntercom)
                 return cached.profile;
 
             var profile = RadioEffectProfile.ForBand(band, channel.IsIntercom, SampleRate);
-            _txProfiles[channel] = (band, profile);
+            _txProfiles[channel] = (band, channel.IsIntercom, profile);
             return profile;
         }
 
         private RadioEffectProfile GetRxProfile(RadioChannel channel, RxState state)
         {
             var band = RadioBandExtensions.FromFrequencyMHz(channel.Frequency);
-            if (state.CachedProfile != null && state.CachedBand == band) return state.CachedProfile;
+            if (state.CachedProfile != null &&
+                state.CachedBand == band &&
+                state.CachedIsIntercom == channel.IsIntercom)
+                return state.CachedProfile;
 
             var profile = RadioEffectProfile.ForBand(band, channel.IsIntercom, SampleRate);
             state.CachedBand = band;
+            state.CachedIsIntercom = channel.IsIntercom;
             state.CachedProfile = profile;
             return profile;
         }
 
-        /// Call on a specific radio's PTT engage/release (after any
-        /// configured release delay has elapsed). Independent per channel --
-        /// other radios' transmit state is unaffected.
+        /// <summary>
+        /// Changes PTT state for one radio without affecting other channels.
+        /// </summary>
         public void SetTransmitting(RadioChannel channel, bool active)
         {
-            lock (_stateLock)
+            if (!active)
             {
-                if (!_txState.TryGetValue(channel, out var state)) return;
-                if (active && !RadioReceiveMute.CanStartTransmission(channel.Volume)) return;
-                if (active == state.IsActive) return;
-                state.IsActive = active;
-
-                if (_rxState.TryGetValue(channel, out var rxState))
+                // Drain captured work before queuing end cues and controls.
+                lock (_micProcessingGate)
                 {
-                    rxState.TalkOver.SetLocalTransmitting(active);
-                    if (active)
-                    {
-                        // Local TX should mute/clear the audible receive path, but
-                        // it must NOT close the RX HUD. RX is remote activity on
-                        // the frequency, and the operator needs to keep seeing who
-                        // else is transmitting while they are talking over them.
-                        if (_jitterBuffers.TryGetValue(channel, out var jitter))
-                            jitter.Reset();
-                        if (_channelBuffers.TryGetValue(channel, out var receiveEntry))
-                            receiveEntry.buffer.ClearBuffer();
-                        rxState.IsReceivingActive = false;
-                        rxState.PendingRemoteClientId = "";
-                        rxState.PendingRemoteCallsign = "";
-                        rxState.HasAudibleReceiveInFlight = false;
-                        rxState.Interference.Reset();
-                        rxState.CollisionDestruction.Reset();
-                    }
-                    else
-                    {
-                        if (_sidetoneBuffers.TryGetValue(channel, out var sidetone))
-                            ClearLocalTalkOverWarning(rxState, sidetone.buffer);
-                        else
-                            rxState.TalkOverWarningCue.Reset();
-                    }
+                    long completedCaptureGeneration = AdvanceMicCaptureGeneration();
+                    DrainMicCaptureQueue(completedCaptureGeneration);
+                    lock (_stateLock)
+                        SetTransmittingLocked(channel, false);
                 }
+                return;
+            }
 
-                PlayLocalSidetone(channel, active ? SoundLibrary.TxStart : SoundLibrary.TxEnd);
+            // Exclude capture blocks queued before key-down.
+            lock (_micProcessingGate)
+            {
+                long completedCaptureGeneration = AdvanceMicCaptureGeneration();
+                bool hadActiveTransmitter;
+                lock (_stateLock)
+                    hadActiveTransmitter = _txState.Values.Any(tx => tx.IsActive);
 
-                if (!active)
+                // Preserve captured speech when another radio keys simultaneously.
+                if (hadActiveTransmitter)
+                    DrainMicCaptureQueue(completedCaptureGeneration);
+                else
+                    DiscardQueuedMicrophoneBuffers(completedCaptureGeneration);
+
+                lock (_stateLock)
+                    SetTransmittingLocked(channel, true);
+            }
+        }
+
+        private void SetTransmittingLocked(RadioChannel channel, bool active)
+        {
+            if (!_txState.TryGetValue(channel, out var state)) return;
+            if (active && !RadioReceiveMute.CanStartTransmission(channel.Volume)) return;
+            if (active == state.IsActive) return;
+
+            if (active)
+            {
+                state.IsActive = true;
+                BeginTransmitEpochLocked(channel, state);
+            }
+            else
+            {
+                // Preserve the final partial frame at PTT-up.
+                FlushPartialTransmitFrameLocked(channel, state, state.IsNetworkEpochAdvertised);
+                if (state.IsNetworkEpochAdvertised)
+                    EmitTransmissionEndsLocked(state);
+                _secureCodec.EndTransmitStream(state.TransmissionId);
+                state.IsNetworkEpochAdvertised = false;
+                state.IsActive = false;
+
+                if (!_txState.Values.Any(tx => tx.IsActive))
                 {
-                    state.Accumulator.Clear();
-                    foreach (var packet in CreateTransmissionEndPackets(channel, state.Sequence, Callsign))
-                        RaiseAudioCaptured(new CapturedAudioEventArgs { Packet = packet });
-                    RaiseTransmissionEnded(new TransmissionEventArgs { Channel = channel, IsLocalTransmit = true, LifecycleSequence = NextTransmissionLifecycleSequence() });
+                    _passthroughProcessor.Reset();
+                    _passthroughOutputConverter.Reset();
+                }
+            }
+
+            if (_rxState.TryGetValue(channel, out var rxState))
+            {
+                rxState.TalkOver.SetLocalTransmitting(active);
+                if (active)
+                {
+                    // Mute receive audio during TX while retaining remote HUD activity.
+                    if (_jitterBuffers.TryGetValue(channel, out var jitter))
+                        jitter.Reset();
+                    if (_channelBuffers.TryGetValue(channel, out var receiveEntry))
+                        receiveEntry.buffer.ClearBuffer();
+                    rxState.IsReceivingActive = false;
+                    rxState.PendingRemoteClientId = "";
+                    rxState.PendingRemoteCallsign = "";
+                    rxState.ActiveAudibleTransmissionHudId = "";
+                    rxState.HasAudibleReceiveInFlight = false;
+                    rxState.PendingHandoffs.Clear();
+                    rxState.IsAudibleTransmissionTerminalPending = false;
+                    rxState.CollisionDestruction.Reset();
                 }
                 else
                 {
-                    state.Sequence = 0;
-                    state.Accumulator.Clear();
-                    RaiseTransmissionStarted(new TransmissionEventArgs { Channel = channel, IsLocalTransmit = true, RemoteCallsign = Callsign, LifecycleSequence = NextTransmissionLifecycleSequence() });
+                    if (_sidetoneBuffers.TryGetValue(channel, out var sidetone))
+                        ClearLocalTalkOverWarning(rxState, sidetone.buffer);
+                    else
+                        rxState.TalkOverWarningCue.Reset();
                 }
+            }
 
+            if (!active)
+            {
+                state.Accumulator.Clear();
+                PlayLocalSidetone(channel, SoundLibrary.TxEnd);
+                RaiseTransmissionEnded(new TransmissionEventArgs { Channel = channel, IsLocalTransmit = true, LifecycleSequence = NextTransmissionLifecycleSequence() });
+            }
+            else
+            {
+                PlayLocalSidetone(channel, SoundLibrary.TxStart);
+                RaiseTransmissionStarted(new TransmissionEventArgs { Channel = channel, IsLocalTransmit = true, RemoteCallsign = state.SenderName, LifecycleSequence = NextTransmissionLifecycleSequence() });
+            }
+        }
+
+        private void BeginTransmitEpochLocked(
+            RadioChannel channel,
+            TxState state,
+            bool? advertiseOnNetwork = null)
+        {
+            state.Sequence = 0;
+            state.MediaFramesSent = 0;
+            state.TransmissionAudioSeed = unchecked((uint)Random.Shared.Next(1, int.MaxValue));
+            state.TransmissionId = CreateTransmissionId();
+            state.IsNetworkEpochAdvertised = advertiseOnNetwork ?? _networkAdvertisingEnabled;
+            state.Frequency = channel.Frequency;
+            state.RadioName = channel.Name;
+            state.SenderName = Callsign;
+            state.Net = channel.SelectedNet;
+            state.Band = RadioBandExtensions.FromFrequencyMHz(channel.Frequency);
+            state.IsIntercom = channel.IsIntercom;
+            state.Ear = channel.Ear;
+            state.Profile = GetTxProfile(channel);
+            state.Accumulator.Clear();
+            state.Profile.ResetTransmit(state.TransmissionAudioSeed);
+            _secureCodec.BeginTransmitStream(state.TransmissionId);
+            _passthroughProcessor.ResetChannel(channel);
+        }
+
+        private static ulong CreateTransmissionId()
+        {
+            Span<byte> bytes = stackalloc byte[sizeof(ulong)];
+            ulong value;
+            do
+            {
+                RandomNumberGenerator.Fill(bytes);
+                value = BitConverter.ToUInt64(bytes);
+            }
+            while (value == 0);
+
+            return value;
+        }
+
+        private void FlushPartialTransmitFrameLocked(
+            RadioChannel channel,
+            TxState state,
+            bool emitNetwork)
+        {
+            if (state.Accumulator.Count == 0) return;
+
+            var frame = new short[FrameSize];
+            int count = Math.Min(FrameSize, state.Accumulator.Count);
+            state.Accumulator.CopyTo(0, frame, 0, count);
+            state.Accumulator.Clear();
+            var prepared = SendFrame(channel, state, frame, emitNetwork);
+            QueuePassthroughFrames(new[] { CreatePassthroughFrame(channel, state, prepared.Encoded) });
+            if (prepared.NetworkPacket != null)
+                RaiseAudioCaptured(new CapturedAudioEventArgs { Packet = prepared.NetworkPacket });
+        }
+
+        private void EmitTransmissionEndsLocked(TxState state)
+        {
+            foreach (var packet in CreateTransmissionEndPackets(
+                state.Frequency,
+                state.RadioName,
+                state.Net,
+                state.Sequence,
+                state.SenderName,
+                ClientId,
+                state.TransmissionId,
+                state.TransmissionAudioSeed))
+            {
+                RaiseAudioCaptured(new CapturedAudioEventArgs { Packet = packet });
             }
         }
 
@@ -471,33 +887,66 @@ namespace RadioRelay.Client.AudioEngineNs
             foreach (EventHandler<TEventArgs> handler in handlers.GetInvocationList())
             {
                 try { handler(this, args); }
-                catch { /* Subscriber failures must not escape audio callbacks or timer ticks. */ }
+                catch
+                {
+                    // Isolate audio callbacks and timers from subscriber failures.
+                }
             }
         }
 
         internal static IReadOnlyList<AudioPacket> CreateTransmissionEndPackets(
             RadioChannel channel,
             ushort sequence,
-            string callsign)
+            string callsign) =>
+            CreateTransmissionEndPackets(
+                channel.Frequency,
+                channel.Name,
+                channel.SelectedNet,
+                sequence,
+                callsign,
+                Guid.Empty,
+                0,
+                0);
+
+        internal static IReadOnlyList<AudioPacket> CreateTransmissionEndPackets(
+            float frequency,
+            string radioName,
+            NetOption net,
+            ushort sequence,
+            string callsign,
+            Guid clientId,
+            ulong transmissionId,
+            uint transmissionAudioSeed)
         {
             var packets = new List<AudioPacket>(TransmissionEndRedundantPacketCount);
-            var net = channel.SelectedNet;
             for (int i = 0; i < TransmissionEndRedundantPacketCount; i++)
             {
-                packets.Add(new AudioPacket
+                var packet = new AudioPacket
                 {
-                    Frequency = channel.Frequency,
+                    ClientId = clientId,
+                    Frequency = frequency,
                     Sequence = sequence,
                     IsTransmissionStart = false,
                     IsTransmissionEnd = true,
                     IsEncrypted = !net.IsUnencrypted,
                     NetIdHash = net.NetIdHash,
-                    Nonce = !net.IsUnencrypted ? new byte[12] : null,
+                    Nonce = !net.IsUnencrypted ? SecureAudioCodec.CreateModernControlNonce() : null,
                     Tag = !net.IsUnencrypted ? new byte[16] : null,
                     SenderName = callsign,
-                    RadioName = channel.Name,
+                    RadioName = radioName,
+                    TransmissionAudioSeed = transmissionAudioSeed,
+                    TransmissionId = transmissionId,
                     Payload = Array.Empty<byte>()
-                });
+                };
+
+                if (!net.IsUnencrypted && transmissionId != 0)
+                {
+                    packet.HeaderAuthTag = PacketCrypto.ComputeHeaderAuthenticationTag(
+                        net.Key!,
+                        packet.GetAuthenticatedHeaderBytes());
+                }
+
+                packets.Add(packet);
             }
 
             return packets;
@@ -505,14 +954,103 @@ namespace RadioRelay.Client.AudioEngineNs
 
         private void OnMicDataAvailable(object? sender, WaveInEventArgs e)
         {
-            RunBackgroundCallback(() => ProcessMicDataAvailable(e));
+            // Defer DSP so the capture callback can immediately requeue its buffer.
+            lock (_micCaptureProducerLock)
+            {
+                if (_micProcessingStopping) return;
+
+                var capturedPcm = new byte[e.BytesRecorded];
+                Buffer.BlockCopy(e.Buffer, 0, capturedPcm, 0, capturedPcm.Length);
+                _micCaptureQueue.Enqueue(new CapturedMicrophoneBuffer(
+                    capturedPcm,
+                    _micCaptureGeneration));
+                System.Threading.Interlocked.Increment(ref _micCaptureQueueCount);
+
+                // Drop oldest capture blocks when processing stalls to bound latency.
+                while (System.Threading.Volatile.Read(ref _micCaptureQueueCount) > MaxQueuedMicrophoneBuffers &&
+                       _micCaptureQueue.TryDequeue(out _))
+                {
+                    System.Threading.Interlocked.Decrement(ref _micCaptureQueueCount);
+                }
+            }
+
+            _micCaptureSignal.Set();
         }
 
-        private void ProcessMicDataAvailable(WaveInEventArgs e)
+        private void StartMicProcessingThread()
+        {
+            if (_micProcessingThread != null) return;
+            _micProcessingStopping = false;
+            _micProcessingThread = new System.Threading.Thread(ProcessMicCaptureQueue)
+            {
+                IsBackground = true,
+                Name = "RadioRelay microphone processor",
+                Priority = System.Threading.ThreadPriority.AboveNormal
+            };
+            _micProcessingThread.Start();
+        }
+
+        private void ProcessMicCaptureQueue()
+        {
+            while (!_micProcessingStopping)
+            {
+                _micCaptureSignal.WaitOne();
+                lock (_micProcessingGate)
+                    DrainMicCaptureQueue();
+            }
+        }
+
+        private void DrainMicCaptureQueue(long maximumGeneration = long.MaxValue)
+        {
+            while (!_micProcessingStopping &&
+                   _micCaptureQueue.TryPeek(out var next) &&
+                   next.Generation <= maximumGeneration &&
+                   _micCaptureQueue.TryDequeue(out var captured))
+            {
+                System.Threading.Interlocked.Decrement(ref _micCaptureQueueCount);
+                RunBackgroundCallback(() => ProcessMicDataAvailable(captured.Pcm));
+            }
+        }
+
+        private void DiscardQueuedMicrophoneBuffers(long maximumGeneration = long.MaxValue)
+        {
+            while (_micCaptureQueue.TryPeek(out var next) &&
+                   next.Generation <= maximumGeneration &&
+                   _micCaptureQueue.TryDequeue(out _))
+                System.Threading.Interlocked.Decrement(ref _micCaptureQueueCount);
+            if (System.Threading.Volatile.Read(ref _micCaptureQueueCount) < 0)
+                System.Threading.Interlocked.Exchange(ref _micCaptureQueueCount, 0);
+        }
+
+        private long AdvanceMicCaptureGeneration()
+        {
+            lock (_micCaptureProducerLock)
+            {
+                long completedGeneration = _micCaptureGeneration;
+                _micCaptureGeneration = unchecked(_micCaptureGeneration + 1);
+                return completedGeneration;
+            }
+        }
+
+        private void ProcessMicDataAvailable(byte[] capturedPcm)
         {
             lock (_stateLock)
             {
-                int sampleCount = e.BytesRecorded / 2;
+                int sampleCount = capturedPcm.Length / 2;
+
+                if (_isMicTestActive)
+                {
+                    var monitorPcm = CreateMicTestPcm(capturedPcm, capturedPcm.Length, InputGain);
+                    lock (_micTestBuffer)
+                    {
+                        // Preserve the primed queue; overflow handling bounds stalled output.
+                        _micTestBuffer.AddSamples(monitorPcm, 0, monitorPcm.Length);
+                    }
+                }
+
+                List<List<LocalRadioPassthroughFrame>>? passthroughFrames =
+                    _passthroughWasapiOut == null ? null : new();
+                var networkPackets = new List<AudioPacket>();
 
                 foreach (var kvp in _txState)
                 {
@@ -521,66 +1059,192 @@ namespace RadioRelay.Client.AudioEngineNs
                     if (!state.IsActive) continue;
 
                     for (int i = 0; i < sampleCount; i++)
-                        state.Accumulator.Add(BitConverter.ToInt16(e.Buffer, i * 2));
+                        state.Accumulator.Add(BitConverter.ToInt16(capturedPcm, i * 2));
 
-                    // WaveInEvent buffers rarely align exactly to 320 samples, so we
-                    // accumulate and slice out exact 20ms Opus frames as they become available.
+                    // Accumulate capture blocks into exact 20 ms Opus frames.
+                    int frameOrdinal = 0;
                     while (state.Accumulator.Count >= FrameSize)
                     {
                         var frame = state.Accumulator.GetRange(0, FrameSize).ToArray();
                         state.Accumulator.RemoveRange(0, FrameSize);
-                        SendFrame(channel, state, frame);
+                        var prepared = SendFrame(channel, state, frame);
+
+                        if (passthroughFrames != null)
+                        {
+                            while (passthroughFrames.Count <= frameOrdinal)
+                                passthroughFrames.Add(new List<LocalRadioPassthroughFrame>());
+                            passthroughFrames[frameOrdinal].Add(
+                                CreatePassthroughFrame(channel, state, prepared.Encoded));
+                        }
+                        if (prepared.NetworkPacket != null)
+                            networkPackets.Add(prepared.NetworkPacket);
+                        frameOrdinal++;
                     }
                 }
+
+                if (passthroughFrames != null)
+                {
+                    foreach (var encodedFrames in passthroughFrames)
+                        QueuePassthroughFrames(encodedFrames);
+                }
+
+                // Queue local recording before invoking transport subscribers.
+                foreach (var packet in networkPackets)
+                    RaiseAudioCaptured(new CapturedAudioEventArgs { Packet = packet });
 
             }
         }
 
-        private void SendFrame(RadioChannel txChannel, TxState state, short[] frame)
+        private PreparedTransmitFrame SendFrame(
+            RadioChannel txChannel,
+            TxState state,
+            short[] frame,
+            bool emitNetwork = true)
         {
             var floatSamples = new float[FrameSize];
             for (int i = 0; i < FrameSize; i++)
-                floatSamples[i] = Math.Clamp((frame[i] / 32768f) * InputGain, -1f, 1f);
+                floatSamples[i] = ApplyInputGainSoftClip(frame[i] / 32768f, InputGain);
 
-            var profile = GetTxProfile(txChannel);
-            profile.TxEffect.Process(floatSamples);
+            var profile = state.Profile ?? throw new InvalidOperationException("Transmit epoch has no DSP profile.");
+            var net = state.Net;
 
-            // Cosmetic "encrypted radio" character on top of the real
-            // AES-GCM encryption below -- purely a sound cue that this
-            // transmission is on a passcode-protected net, independent of
-            // the actual security mechanism.
-            var net = txChannel.SelectedNet;
-            if (!net.IsUnencrypted)
-                profile.EncryptionEffect.Process(floatSamples);
+            // Run secure-voice coloration through the same FM modulation as speech.
+            ApplyTransmitEffects(floatSamples, profile, encrypted: !net.IsUnencrypted);
 
             for (int i = 0; i < FrameSize; i++)
                 frame[i] = (short)Math.Clamp(floatSamples[i] * 32767f, short.MinValue, short.MaxValue);
 
-            var encoded = _secureCodec.EncodeAndEncrypt(frame, net);
+            var encoded = _secureCodec.EncodeAndEncrypt(frame, net, state.TransmissionId);
 
-            bool isFirst = state.Sequence == 0;
-            state.Sequence++;
+            state.Sequence = unchecked((ushort)(state.Sequence + 1));
+            state.MediaFramesSent++;
 
-            RaiseAudioCaptured(new CapturedAudioEventArgs
+            var packet = new AudioPacket
             {
-                Packet = new AudioPacket
-                {
-                    Frequency = txChannel.Frequency,
-                    Sequence = state.Sequence,
-                    IsTransmissionStart = isFirst,
-                    IsTransmissionEnd = false,
-                    IsEncrypted = encoded.IsEncrypted,
-                    NetIdHash = encoded.NetIdHash,
-                    Nonce = encoded.Nonce,
-                    Tag = encoded.Tag,
-                    SenderName = Callsign,
-                    RadioName = txChannel.Name,
-                    Payload = encoded.Payload
-                }
-            });
+                ClientId = ClientId,
+                Frequency = state.Frequency,
+                Sequence = state.Sequence,
+                // Set the core Start bit only on frame one to avoid jitter-buffer resets.
+                IsTransmissionStart = state.MediaFramesSent == 1,
+                IsTransmissionStartHint = state.MediaFramesSent <= TransmissionStartRedundantFrameCount,
+                IsTransmissionEnd = false,
+                IsEncrypted = encoded.IsEncrypted,
+                NetIdHash = encoded.NetIdHash,
+                Nonce = encoded.Nonce,
+                Tag = encoded.Tag,
+                SenderName = state.SenderName,
+                RadioName = state.RadioName,
+                TransmissionAudioSeed = state.TransmissionAudioSeed,
+                TransmissionId = state.TransmissionId,
+                Payload = encoded.Payload
+            };
+
+            if (!net.IsUnencrypted)
+            {
+                packet.HeaderAuthTag = PacketCrypto.ComputeHeaderAuthenticationTag(
+                    net.Key!,
+                    packet.GetAuthenticatedHeaderBytes());
+            }
+
+            return new PreparedTransmitFrame(
+                encoded,
+                emitNetwork && state.IsNetworkEpochAdvertised ? packet : null);
         }
 
+        internal static void ApplyTransmitEffects(
+            float[] samples,
+            RadioEffectProfile profile,
+            bool encrypted)
+        {
+            if (encrypted)
+                profile.EncryptionEffect.Process(samples);
+            profile.TxEffect.Process(samples);
+        }
+
+        internal static float ApplyInputGainSoftClip(float sample, float inputGain)
+        {
+            float value = sample * Math.Max(0f, inputGain);
+            float magnitude = Math.Abs(value);
+            const float knee = 0.82f;
+            if (magnitude <= knee) return value;
+
+            float compressed = knee + (1f - knee) *
+                (1f - MathF.Exp(-(magnitude - knee) / (1f - knee)));
+            return MathF.CopySign(Math.Min(compressed, 1f), value);
+        }
+
+        private static LocalRadioPassthroughFrame CreatePassthroughFrame(
+            RadioChannel channel,
+            TxState state,
+            EncodedFrame encoded) =>
+            new(
+                channel,
+                encoded.OpusPayload,
+                state.TransmissionAudioSeed,
+                state.TransmissionId,
+                state.Frequency,
+                state.IsIntercom,
+                state.Ear);
+
+        private void QueuePassthroughFrames(IReadOnlyList<LocalRadioPassthroughFrame> encodedFrames)
+        {
+            if (_passthroughWasapiOut == null || encodedFrames.Count == 0) return;
+
+            var receivedStereo = _passthroughProcessor.Process(encodedFrames);
+            var passthroughPcm = _passthroughOutputConverter.Convert(receivedStereo);
+            lock (_passthroughBuffer)
+            {
+                TrimPassthroughLiveBacklog(passthroughPcm.Length);
+                _passthroughBuffer.AddSamples(passthroughPcm, 0, passthroughPcm.Length);
+            }
+        }
+
+        private void TrimPassthroughLiveBacklog(int incomingBytes)
+        {
+            int blockAlign = _passthroughBuffer.WaveFormat.BlockAlign;
+            int maximumBytes = _passthroughBuffer.WaveFormat.AverageBytesPerSecond *
+                PassthroughMaximumLiveBacklogMilliseconds / 1000;
+            maximumBytes -= maximumBytes % blockAlign;
+
+            int allowedExistingBytes = Math.Max(0, maximumBytes - incomingBytes);
+            int excessBytes = Math.Max(0, _passthroughBuffer.BufferedBytes - allowedExistingBytes);
+            excessBytes -= excessBytes % blockAlign;
+            if (excessBytes == 0) return;
+
+            // Drop oldest rendered samples to bound clock drift and output stalls.
+            var discard = new byte[excessBytes];
+            _passthroughBuffer.Read(discard, 0, discard.Length);
+        }
+
+        internal static byte[] CreateMicTestPcm(byte[] capturedPcm, int bytesRecorded, float inputGain)
+        {
+            int safeByteCount = Math.Clamp(bytesRecorded, 0, capturedPcm.Length) & ~1;
+            var monitoredPcm = new byte[safeByteCount];
+            for (int offset = 0; offset < safeByteCount; offset += 2)
+            {
+                short sample = unchecked((short)(capturedPcm[offset] | (capturedPcm[offset + 1] << 8)));
+                short scaled = (short)Math.Clamp(
+                    Math.Round(sample * Math.Max(0f, inputGain)),
+                    short.MinValue,
+                    short.MaxValue);
+                monitoredPcm[offset] = unchecked((byte)scaled);
+                monitoredPcm[offset + 1] = unchecked((byte)(scaled >> 8));
+            }
+
+            return monitoredPcm;
+        }
+
+        private void ResetPassthroughBufferForTransmission()
+        {
+            if (_passthroughWasapiOut == null) return;
+
+            lock (_passthroughBuffer)
+                _passthroughBuffer.ClearBuffer();
+        }
+
+        /// <summary>
         /// Called by the networking layer when an audio packet arrives from another client.
+        /// </summary>
         public void OnAudioReceived(AudioPacket packet)
         {
             lock (_stateLock)
@@ -599,161 +1263,325 @@ namespace RadioRelay.Client.AudioEngineNs
                         DisableChannelReceive(ch, rxState);
                         continue;
                     }
+                    var net = ch.SelectedNet;
+                    bool netMatches = net.IsUnencrypted
+                        ? !packet.IsEncrypted
+                        : packet.IsEncrypted && NetIdHashesEqual(net.NetIdHash, packet.NetIdHash);
+                    byte[]? opusFrame = null;
 
-                    if (!PacketMatchesChannelForReceiveControl(ch, packet)) continue;
-                    var packetReceivedUtc = DateTime.UtcNow;
-                    foreach (var expiredSenderId in ExpireStaleRemoteTransmitters(
-                        rxState,
-                        packet.ClientId,
-                        packetReceivedUtc,
-                        StaleRemoteActivityFallbackTimeout))
+                    if (netMatches && !net.IsUnencrypted)
                     {
-                        EndRemoteReceiveHud(ch, rxState, expiredSenderId.ToString());
-                    }
-                    rxState.LastRemotePacketUtc = packetReceivedUtc;
-                    rxState.LastRemotePacketUtcByClient[packet.ClientId] = packetReceivedUtc;
-
-                    bool remoteEndControlProcessed = false;
-                    bool remoteEndWasAcceptedSender = false;
-                    if (packet.IsTransmissionEnd)
-                    {
-                        remoteEndWasAcceptedSender = rxState.Interference.ShouldAcceptAudioFrom(packet.ClientId);
-                        bool deferHudEndUntilAudioDrains = ShouldDeferRemoteHudEndUntilAudioDrains(
-                            remoteEndWasAcceptedSender,
-                            IsTransmitting(ch),
-                            rxState.HasAudibleReceiveInFlight);
-
-                        rxState.TalkOver.ObserveRemoteTransmissionEnd(packet.ClientId);
-                        rxState.Interference.ObserveTransmissionEnd(packet.ClientId);
-                        rxState.LastRemotePacketUtcByClient.Remove(packet.ClientId);
-                        if (!rxState.Interference.HasInterference)
-                            rxState.CollisionDestruction.Reset();
-                        if (!deferHudEndUntilAudioDrains)
-                            EndRemoteReceiveHud(ch, rxState, packet.ClientId.ToString());
-                        remoteEndControlProcessed = true;
-
-                        // Empty end packets are control-plane only, but they are
-                        // also the data-plane signal that no more frames are coming.
-                        // Feed them into jitter so RX audio/HUD end together when
-                        // buffered audio drains, instead of leaving jitter to coast
-                        // on packet-loss concealment after the UI already hid RX.
-                        if (packet.Payload.Length == 0)
+                        // Authenticate modern metadata before mutating receive state.
+                        bool requiresAuthenticatedHeader = RequiresAuthenticatedHeader(packet);
+                        if ((requiresAuthenticatedHeader || packet.HeaderAuthTag != null) &&
+                            !PacketCrypto.VerifyHeaderAuthenticationTag(
+                                net.Key!,
+                                packet.GetAuthenticatedHeaderBytes(),
+                                packet.HeaderAuthTag))
                         {
-                            if (deferHudEndUntilAudioDrains)
-                                jitter.OnFrameReceived(packet.Sequence, Array.Empty<byte>(), isStart: false, isEnd: true);
                             continue;
                         }
-                    }
 
-                    byte[]? opusFrame;
-                    var net = ch.SelectedNet;
-
-                    if (net.IsUnencrypted)
-                    {
-                        // This radio has no passcode set -- it has no key to
-                        // decrypt anything with, so only open/unencrypted
-                        // traffic makes sense to accept.
-                        opusFrame = packet.IsEncrypted ? null : packet.Payload;
-                    }
-                    else
-                    {
-                        // This radio HAS a passcode set: it should only ever
-                        // hear traffic encrypted under that exact passcode.
-                        // Both open/unencrypted traffic AND traffic encrypted
-                        // under a DIFFERENT passcode are correctly treated as
-                        // unheard here -- setting a passcode "locks" this radio
-                        // to that one net, rather than merely adding decryption
-                        // capability on top of still hearing everything open.
-                        opusFrame = (packet.IsEncrypted && NetIdHashesEqual(net.NetIdHash, packet.NetIdHash))
-                            ? _secureCodec.DecryptToOpusFrame(packet.Payload, packet.Nonce, packet.Tag, net.Key!)
-                            : null;
-                    }
-
-                    // opusFrame is null if this radio's current passcode doesn't
-                    // match whatever (if anything) encrypted this packet, or the
-                    // packet failed AES-GCM authentication. Either way, treat
-                    // the transmission as never having been received at all: no
-                    // jitter buffer interaction, no HUD popup for traffic we
-                    // can't actually hear, and no local interference cue for a
-                    // net this receiver is not tuned/unlocked to hear.
-                    if (opusFrame == null) continue;
-
-                    var remoteClientId = packet.ClientId.ToString();
-                    if (packet.IsTransmissionStart)
-                        StartRemoteReceiveHud(ch, rxState, remoteClientId, packet.SenderName);
-
-                    if (RadioReceiveMute.ShouldMuteReceivedAudio(IsTransmitting(ch)))
-                    {
-                        // We are transmitting, so do not feed remote audio into
-                        // the jitter/playout path. Still update the RX HUD and
-                        // talk-over state from packet start/end flags so the
-                        // operator can see who is keyed up on-frequency.
-                        if (packet.IsTransmissionStart || (packet.IsTransmissionEnd && !remoteEndControlProcessed))
+                        if (packet.IsTransmissionEnd && packet.Payload.Length == 0)
                         {
-                            ProcessMutedRemoteReceiveControl(
-                                ch,
-                                rxState,
-                                packet,
-                                (channel, callsign, clientId) => StartRemoteReceiveHud(channel, rxState, clientId, callsign),
-                                (channel, callsign, clientId) => EndRemoteReceiveHud(channel, rxState, clientId));
-                        }
-
-                        continue;
-                    }
-
-                    bool forceJitterStart = false;
-                    if (packet.IsTransmissionStart)
-                    {
-                        rxState.TalkOver.ObserveRemoteTransmissionStart(packet.ClientId);
-
-                        var decision = rxState.Interference.ObserveTransmissionStart(packet.ClientId);
-                        if (!decision.AcceptAudio) continue;
-                    }
-                    else if (!remoteEndWasAcceptedSender && !rxState.Interference.ShouldAcceptAudioFrom(packet.ClientId))
-                    {
-                        bool canReacquireMutedTalkover = !packet.IsTransmissionEnd
-                            && !rxState.Interference.HasPrimarySender
-                            && rxState.TalkOver.IsRemoteTransmitting(packet.ClientId);
-                        if (canReacquireMutedTalkover)
-                        {
-                            var decision = rxState.Interference.ObserveMidStreamTransmission(packet.ClientId);
-                            if (!decision.AcceptAudio) continue;
-                            ReacquireRemoteReceiveFromMidStream(rxState, packet, entry.buffer);
-                            forceJitterStart = true;
+                            opusFrame = Array.Empty<byte>();
                         }
                         else
                         {
-                            if (packet.IsTransmissionEnd && !remoteEndControlProcessed)
+                            opusFrame = _secureCodec.DecryptToOpusFrame(
+                                packet.Payload,
+                                packet.Nonce,
+                                packet.Tag,
+                                net.Key!);
+                            if (opusFrame == null) continue;
+                        }
+                    }
+                    else if (netMatches)
+                    {
+                        opusFrame = packet.Payload;
+                    }
+
+                    // Undecodable on-frequency packets still contribute RF carrier energy.
+                    bool canDecodeVoice = opusFrame != null;
+                    var transmission = RadioTransmissionKey.FromPacket(packet);
+                    bool isStartSignal = packet.IsTransmissionStart || packet.IsTransmissionStartHint;
+                    var packetReceivedUtc = DateTime.UtcNow;
+                    foreach (var expired in ExpireStaleRemoteTransmissions(
+                        rxState,
+                        transmission,
+                        packetReceivedUtc,
+                        StaleRemoteActivityFallbackTimeout))
+                    {
+                        EndRemoteReceiveHud(ch, rxState, expired.HudId);
+                    }
+
+                    bool wasActiveCarrier = rxState.Interference.IsActive(transmission);
+                    bool wasPrimaryCarrier = rxState.Interference.ShouldAcceptAudioFrom(transmission);
+                    bool isLocallyTransmitting = IsTransmitting(ch);
+
+                    foreach (var expiredEnd in rxState.RecentlyEndedRemoteTransmissions
+                        .Where(entry => entry.Value <= packetReceivedUtc)
+                        .Select(entry => entry.Key)
+                        .ToArray())
+                    {
+                        rxState.RecentlyEndedRemoteTransmissions.Remove(expiredEnd);
+                    }
+                    foreach (var expiredEnd in rxState.PendingEarlyEnds
+                        .Where(entry => entry.Value.ExpiresUtc <= packetReceivedUtc)
+                        .Select(entry => entry.Key)
+                        .ToArray())
+                    {
+                        rxState.PendingEarlyEnds.Remove(expiredEnd);
+                    }
+
+                    var pendingHandoff = FindPendingReceiveHandoff(rxState, transmission);
+                    if (!packet.IsTransmissionEnd && canDecodeVoice && pendingHandoff != null)
+                    {
+                        pendingHandoff.Add(new PendingRemoteFrame(
+                            packet.Sequence,
+                            opusFrame!,
+                            isStartSignal,
+                            IsEnd: false));
+                        continue;
+                    }
+
+                    if (!packet.IsTransmissionEnd &&
+                        rxState.RecentlyEndedRemoteTransmissions.ContainsKey(transmission))
+                    {
+                        // Accept late media without reopening carrier or lifecycle state.
+                        if (canDecodeVoice && !isLocallyTransmitting &&
+                            packet.TransmissionId != 0 &&
+                            jitter.ActiveTransmissionId == packet.TransmissionId)
+                        {
+                            jitter.OnFrameReceived(
+                                packet.TransmissionId,
+                                packet.Sequence,
+                                opusFrame!,
+                                isStart: false,
+                                isEnd: false,
+                                JitterAcquisitionMode.None);
+                        }
+                        continue;
+                    }
+
+                    if (packet.IsTransmissionEnd && canDecodeVoice && pendingHandoff != null)
+                    {
+                        pendingHandoff.Add(new PendingRemoteFrame(
+                            packet.Sequence,
+                            opusFrame!,
+                            IsStart: false,
+                            IsEnd: true));
+                        RemoveRemotePacketTimestamp(rxState, transmission);
+                        rxState.TalkOver.ObserveRemoteTransmissionEnd(transmission);
+                        rxState.Interference.ObserveTransmissionEnd(transmission);
+                        RememberRecentlyEnded(rxState, transmission, packetReceivedUtc);
+                        continue;
+                    }
+
+                    if (packet.IsTransmissionEnd)
+                    {
+                        // Only the first redundant End may mutate an active epoch.
+                        if (!wasActiveCarrier)
+                        {
+                            if (transmission.TransmissionId != 0)
                             {
-                                rxState.TalkOver.ObserveRemoteTransmissionEnd(packet.ClientId);
-                                rxState.Interference.ObserveTransmissionEnd(packet.ClientId);
-                                if (!rxState.Interference.HasInterference)
-                                    rxState.CollisionDestruction.Reset();
-                                EndRemoteReceiveHud(ch, rxState, packet.ClientId.ToString());
+                                if (rxState.PendingEarlyEnds.Count >= MaxRecentlyEndedRemoteTransmissions)
+                                {
+                                    var oldest = rxState.PendingEarlyEnds
+                                        .MinBy(entry => entry.Value.ExpiresUtc).Key;
+                                    rxState.PendingEarlyEnds.Remove(oldest);
+                                }
+                                rxState.PendingEarlyEnds[transmission] = new PendingRemoteEnd(
+                                    packet.Sequence,
+                                    opusFrame ?? Array.Empty<byte>(),
+                                    packetReceivedUtc + LateRemoteMediaGracePeriod);
                             }
                             continue;
                         }
+
+                        rxState.LastRemotePacketUtc = packetReceivedUtc;
+                        RemoveRemotePacketTimestamp(rxState, transmission);
+
+                        bool deferHudEndUntilAudioDrains =
+                            canDecodeVoice &&
+                            ShouldDeferRemoteHudEndUntilAudioDrains(
+                                wasPrimaryCarrier,
+                                isLocallyTransmitting,
+                                rxState.HasAudibleReceiveInFlight);
+
+                        bool terminalAccepted = false;
+                        if (wasPrimaryCarrier && canDecodeVoice && !isLocallyTransmitting)
+                        {
+                            terminalAccepted = jitter.OnFrameReceived(
+                                packet.TransmissionId,
+                                packet.Sequence,
+                                opusFrame!,
+                                isStart: false,
+                                isEnd: true,
+                                JitterAcquisitionMode.None);
+                            if (terminalAccepted)
+                                rxState.IsAudibleTransmissionTerminalPending = true;
+                        }
+
+                        rxState.TalkOver.ObserveRemoteTransmissionEnd(transmission);
+                        rxState.Interference.ObserveTransmissionEnd(transmission);
+                        RememberRecentlyEnded(rxState, transmission, packetReceivedUtc);
+                        if (!rxState.Interference.HasInterference)
+                            rxState.CollisionDestruction.Reset();
+
+                        if (!deferHudEndUntilAudioDrains || !terminalAccepted)
+                            EndRemoteReceiveHud(ch, rxState, transmission.HudId);
+                        continue;
+                    }
+
+                    bool acquiredCarrier = !wasActiveCarrier;
+                    InterferenceStartDecision carrierDecision;
+                    if (isStartSignal)
+                    {
+                        rxState.TalkOver.ObserveRemoteTransmissionStart(transmission);
+                        carrierDecision = rxState.Interference.ObserveTransmissionStart(transmission);
+                    }
+                    else if (acquiredCarrier || !rxState.Interference.HasPrimarySender)
+                    {
+                        // Reacquire after lost starts, late joins, or carrier handoff.
+                        if (acquiredCarrier)
+                            rxState.TalkOver.ObserveRemoteTransmissionStart(transmission);
+                        carrierDecision = rxState.Interference.ObserveMidStreamTransmission(transmission);
+                    }
+                    else
+                    {
+                        bool isPrimary = rxState.Interference.ShouldAcceptAudioFrom(transmission);
+                        carrierDecision = new InterferenceStartDecision
+                        {
+                            AcceptAudio = isPrimary,
+                            IsPrimarySender = isPrimary,
+                            IsInterferingSender = !isPrimary
+                        };
+                    }
+
+                    rxState.LastRemotePacketUtc = packetReceivedUtc;
+                    rxState.LastRemotePacketUtcByTransmission[transmission] = packetReceivedUtc;
+                    rxState.LastRemotePacketUtcByClient[packet.ClientId] = packetReceivedUtc;
+                    bool hasEarlyEnd = rxState.PendingEarlyEnds.TryGetValue(
+                        transmission,
+                        out var earlyEnd);
+
+                    if (canDecodeVoice && (isStartSignal || acquiredCarrier))
+                        StartRemoteReceiveHud(ch, rxState, transmission.HudId, packet.SenderName);
+
+                    if (isLocallyTransmitting || !carrierDecision.AcceptAudio || !canDecodeVoice)
+                    {
+                        if (hasEarlyEnd)
+                        {
+                            rxState.PendingEarlyEnds.Remove(transmission);
+                            rxState.TalkOver.ObserveRemoteTransmissionEnd(transmission);
+                            rxState.Interference.ObserveTransmissionEnd(transmission);
+                            RemoveRemotePacketTimestamp(rxState, transmission);
+                            RememberRecentlyEnded(rxState, transmission, packetReceivedUtc);
+                            if (canDecodeVoice)
+                                EndRemoteReceiveHud(ch, rxState, transmission.HudId);
+                        }
+                        continue;
                     }
 
                     entry.vol.Volume = BoostVolume(ch.Volume);
                     entry.pan.Pan = EarToPan(ch.Ear);
 
-                    rxState.HasAudibleReceiveInFlight = true;
-                    jitter.OnFrameReceived(packet.Sequence, opusFrame, packet.IsTransmissionStart, packet.IsTransmissionEnd, forceJitterStart);
-
-                    if (packet.IsTransmissionEnd && !remoteEndControlProcessed)
+                    bool followsTerminalStream = packet.TransmissionId != 0
+                        ? jitter.ActiveTransmissionId != packet.TransmissionId
+                        : rxState.ActiveAudibleTransmissionHudId != transmission.HudId;
+                    if (rxState.IsAudibleTransmissionTerminalPending && followsTerminalStream)
                     {
-                        rxState.TalkOver.ObserveRemoteTransmissionEnd(packet.ClientId);
-                        rxState.Interference.ObserveTransmissionEnd(packet.ClientId);
-                        if (!rxState.Interference.HasInterference)
-                            rxState.CollisionDestruction.Reset();
+                        pendingHandoff = FindPendingReceiveHandoff(rxState, transmission);
+                        if (pendingHandoff == null &&
+                            rxState.PendingHandoffs.Count < MaxPendingReceiveHandoffs)
+                        {
+                            pendingHandoff = new PendingReceiveHandoff
+                            {
+                                Transmission = transmission,
+                                Callsign = packet.SenderName,
+                                AudioSeed = RadioTransmissionNoiseSeed.Resolve(
+                                    packet.TransmissionAudioSeed,
+                                    opusFrame!),
+                                ReceiverOffsetMHz = packet.Frequency - ch.Frequency
+                            };
+                            rxState.PendingHandoffs.Add(pendingHandoff);
+                        }
+
+                        if (pendingHandoff != null)
+                        {
+                            pendingHandoff.Add(new PendingRemoteFrame(
+                                packet.Sequence,
+                                opusFrame!,
+                                isStartSignal,
+                                IsEnd: false));
+                            if (hasEarlyEnd)
+                            {
+                                pendingHandoff.Add(new PendingRemoteFrame(
+                                    earlyEnd.Sequence,
+                                    earlyEnd.OpusPayload,
+                                    IsStart: false,
+                                    IsEnd: true));
+                                rxState.PendingEarlyEnds.Remove(transmission);
+                                rxState.TalkOver.ObserveRemoteTransmissionEnd(transmission);
+                                rxState.Interference.ObserveTransmissionEnd(transmission);
+                                RemoveRemotePacketTimestamp(rxState, transmission);
+                                RememberRecentlyEnded(rxState, transmission, packetReceivedUtc);
+                            }
+                        }
+                        continue;
                     }
 
-                    if (packet.IsTransmissionStart)
+                    bool needsAcquisition = !isStartSignal &&
+                        (acquiredCarrier ||
+                         (packet.TransmissionId != 0 && jitter.ActiveTransmissionId != packet.TransmissionId));
+                    var acquisitionMode = needsAcquisition
+                        ? packet.TransmissionId == 0
+                            ? JitterAcquisitionMode.Immediate
+                            : JitterAcquisitionMode.Buffered
+                        : JitterAcquisitionMode.None;
+
+                    bool accepted = jitter.OnFrameReceived(
+                        packet.TransmissionId,
+                        packet.Sequence,
+                        opusFrame!,
+                        isStartSignal,
+                        isEnd: false,
+                        acquisitionMode);
+                    if (!accepted) continue;
+
+                    if (hasEarlyEnd)
                     {
-                        rxState.PendingRemoteClientId = packet.ClientId.ToString();
+                        bool terminalAccepted = jitter.OnFrameReceived(
+                            packet.TransmissionId,
+                            earlyEnd.Sequence,
+                            earlyEnd.OpusPayload,
+                            isStart: false,
+                            isEnd: true,
+                            JitterAcquisitionMode.None);
+                        rxState.PendingEarlyEnds.Remove(transmission);
+                        rxState.TalkOver.ObserveRemoteTransmissionEnd(transmission);
+                        rxState.Interference.ObserveTransmissionEnd(transmission);
+                        RemoveRemotePacketTimestamp(rxState, transmission);
+                        RememberRecentlyEnded(rxState, transmission, packetReceivedUtc);
+                        rxState.IsAudibleTransmissionTerminalPending = terminalAccepted;
+                        if (!terminalAccepted)
+                            EndRemoteReceiveHud(ch, rxState, transmission.HudId);
+                    }
+
+                    if (isStartSignal || needsAcquisition)
+                    {
+                        rxState.PendingTransmissionAudioSeed = RadioTransmissionNoiseSeed.Resolve(
+                            packet.TransmissionAudioSeed,
+                            opusFrame!);
+                        rxState.PendingRemoteClientId = transmission.HudId;
                         rxState.PendingRemoteCallsign = packet.SenderName;
+                        rxState.PendingReceiverOffsetMHz = packet.Frequency - ch.Frequency;
+                        if (needsAcquisition)
+                            ReacquireRemoteReceiveFromMidStream(rxState, packet, entry.buffer, transmission.HudId);
                     }
+
+                    rxState.HasAudibleReceiveInFlight = true;
                 }
 
             }
@@ -766,6 +1594,10 @@ namespace RadioRelay.Client.AudioEngineNs
             wasAcceptedSender &&
             hasAudibleReceiveInFlight &&
             !RadioReceiveMute.ShouldMuteReceivedAudio(localTransmitting);
+
+        internal static bool RequiresAuthenticatedHeader(AudioPacket packet) =>
+            packet.TransmissionId != 0 ||
+            (packet.IsEncrypted && SecureAudioCodec.HasModernHeaderNonce(packet.Nonce));
 
         internal static bool ShouldFallbackClearStaleRemoteActivity(
             bool hasRemoteActivity,
@@ -807,20 +1639,75 @@ namespace RadioRelay.Client.AudioEngineNs
             return expiredSenderIds;
         }
 
+        internal static RadioTransmissionKey[] ExpireStaleRemoteTransmissions(
+            RxState rxState,
+            RadioTransmissionKey currentTransmission,
+            DateTime nowUtc,
+            TimeSpan idleTimeout)
+        {
+            var expired = rxState.LastRemotePacketUtcByTransmission
+                .Where(entry => entry.Key != currentTransmission && nowUtc - entry.Value >= idleTimeout)
+                .Select(entry => entry.Key)
+                .ToArray();
+
+            foreach (var transmission in expired)
+            {
+                rxState.LastRemotePacketUtcByTransmission.Remove(transmission);
+                rxState.TalkOver.ObserveRemoteTransmissionEnd(transmission);
+                rxState.Interference.ObserveTransmissionEnd(transmission);
+                if (!rxState.LastRemotePacketUtcByTransmission.Keys.Any(
+                        key => key.ClientId == transmission.ClientId))
+                {
+                    rxState.LastRemotePacketUtcByClient.Remove(transmission.ClientId);
+                }
+            }
+
+            if (!rxState.Interference.HasInterference)
+                rxState.CollisionDestruction.Reset();
+
+            return expired;
+        }
+
+        private static void RemoveRemotePacketTimestamp(
+            RxState rxState,
+            RadioTransmissionKey transmission)
+        {
+            rxState.LastRemotePacketUtcByTransmission.Remove(transmission);
+            if (!rxState.LastRemotePacketUtcByTransmission.Keys.Any(
+                    key => key.ClientId == transmission.ClientId))
+            {
+                rxState.LastRemotePacketUtcByClient.Remove(transmission.ClientId);
+            }
+        }
+
+        private static void RememberRecentlyEnded(
+            RxState rxState,
+            RadioTransmissionKey transmission,
+            DateTime endedUtc)
+        {
+            if (transmission.TransmissionId == 0) return;
+            if (rxState.RecentlyEndedRemoteTransmissions.Count >=
+                MaxRecentlyEndedRemoteTransmissions)
+            {
+                var oldest = rxState.RecentlyEndedRemoteTransmissions
+                    .MinBy(entry => entry.Value).Key;
+                rxState.RecentlyEndedRemoteTransmissions.Remove(oldest);
+            }
+            rxState.RecentlyEndedRemoteTransmissions[transmission] =
+                endedUtc + LateRemoteMediaGracePeriod;
+        }
+
         internal static void ReacquireRemoteReceiveFromMidStream(
             RxState rxState,
             AudioPacket packet,
-            BufferedWaveProvider? receiveBuffer = null)
+            BufferedWaveProvider? receiveBuffer = null,
+            string? remoteHudId = null)
         {
-            rxState.PendingRemoteClientId = packet.ClientId.ToString();
+            rxState.PendingRemoteClientId = remoteHudId ?? packet.ClientId.ToString();
             rxState.PendingRemoteCallsign = packet.SenderName;
             rxState.CollisionDestruction.Reset();
 
-            // A mid-stream reacquire is effectively tuning to a fresh receiver
-            // after a collision/talkover episode. The jitter buffer already
-            // drops stale decoder history via forceStart; clear any already
-            // queued collided PCM too so the remaining sender resumes cleanly
-            // instead of playing through old crackled audio first.
+            // Clear queued collision audio when reacquiring a stream mid-transmission.
             if (receiveBuffer != null)
             {
                 lock (receiveBuffer)
@@ -1034,51 +1921,60 @@ namespace RadioRelay.Client.AudioEngineNs
                     if (result.IsFirstFrame)
                     {
                         rxState.IsReceivingActive = true;
+                        rxState.ActiveAudibleTransmissionHudId = rxState.PendingRemoteClientId;
+                        GetRxProfile(ch, rxState).ResetReceive();
+                        rxState.Noise.Reset(rxState.PendingTransmissionAudioSeed);
+                        rxState.Detuning.Reset(
+                            rxState.PendingReceiverOffsetMHz,
+                            RadioBandExtensions.FromFrequencyMHz(ch.Frequency),
+                            ch.IsIntercom,
+                            rxState.PendingTransmissionAudioSeed);
                         StartRemoteReceiveHud(ch, rxState, rxState.PendingRemoteClientId, rxState.PendingRemoteCallsign);
-                        var startClick = FloatsToPcm(ScaleVolume(SoundLibrary.RxStart, OutputClickVolume));
+                        var startClick = RenderFilteredReceiveCue(
+                            ch,
+                            rxState,
+                            SoundLibrary.RxStart,
+                            FilteredReceiveStartCueGain);
                         entry.buffer.AddSamples(startClick, 0, startClick.Length);
                     }
 
                     if (rxState.IsReceivingActive)
                     {
                         var profile = GetRxProfile(ch, rxState);
-                        var frame = new float[FrameSize];
-
-                        if (result.Pcm != null)
-                        {
-                            for (int i = 0; i < FrameSize && i < result.Pcm.Length; i++)
-                                frame[i] = result.Pcm[i] / 32768f;
-                            profile.RxEffect.Process(frame);
-                        }
-
-                        MixInBandNoise(ch, rxState, profile, frame);
+                        var frame = RadioReceiveFrameProcessor.Process(
+                            result.Pcm,
+                            ch,
+                            profile,
+                            rxState.Noise);
+                        rxState.Detuning.Process(frame);
                         MixCoChannelInterference(ch, rxState, frame);
 
                         var bytes = FloatsToPcm(frame);
                         entry.buffer.AddSamples(bytes, 0, bytes.Length);
                     }
 
-                    // End click is queued right after the last real decoded
-                    // frame's bytes, in the same buffer, so it plays exactly when
-                    // that audio finishes -- matching whatever the PTT release
-                    // delay actually was, instead of firing the instant the (already
-                    // delayed) end-of-transmission packet showed up over the wire.
+                    // Queue the end cue after the final decoded frame.
                     if (result.IsLastFrame)
                     {
+                        bool hadActiveReceivePlayout = rxState.IsReceivingActive;
                         rxState.IsReceivingActive = false;
+                        rxState.IsAudibleTransmissionTerminalPending = false;
                         rxState.TalkOverWarningCue.Reset();
                         rxState.HasAudibleReceiveInFlight = false;
-                        var endClick = FloatsToPcm(ScaleVolume(SoundLibrary.RxEnd, OutputClickVolume));
-                        entry.buffer.AddSamples(endClick, 0, endClick.Length);
-                        if (!rxState.TalkOver.HasRemoteTransmitters)
+                        // Avoid an orphan end cue when the first Opus frame is malformed.
+                        if (hadActiveReceivePlayout)
                         {
-                            EndAllRemoteReceiveHuds(ch, rxState, (_, remoteCallsign, remoteClientId) =>
-                                RaiseRemoteTransmissionEnded(ch, remoteCallsign, remoteClientId));
+                            var endClick = RenderFilteredReceiveCue(
+                                ch,
+                                rxState,
+                                SoundLibrary.RxEnd,
+                                FilteredReceiveEndCueGain);
+                            entry.buffer.AddSamples(endClick, 0, endClick.Length);
                         }
-                        else
-                        {
-                            EndRemoteReceiveHud(ch, rxState);
-                        }
+                        if (!string.IsNullOrEmpty(rxState.ActiveAudibleTransmissionHudId))
+                            EndRemoteReceiveHud(ch, rxState, rxState.ActiveAudibleTransmissionHudId);
+                        rxState.ActiveAudibleTransmissionHudId = "";
+                        ActivatePendingReceiveHandoff(rxState, jitter);
                     }
 
                     bool hasRemoteActivity = rxState.IsReceiveHudActive ||
@@ -1099,8 +1995,14 @@ namespace RadioRelay.Client.AudioEngineNs
                         rxState.CollisionDestruction.Reset();
                         rxState.IsReceivingActive = false;
                         rxState.HasAudibleReceiveInFlight = false;
+                        rxState.ActiveAudibleTransmissionHudId = "";
                         rxState.LastRemotePacketUtc = null;
                         rxState.LastRemotePacketUtcByClient.Clear();
+                        rxState.LastRemotePacketUtcByTransmission.Clear();
+                        rxState.RecentlyEndedRemoteTransmissions.Clear();
+                        rxState.PendingEarlyEnds.Clear();
+                        rxState.PendingHandoffs.Clear();
+                        rxState.IsAudibleTransmissionTerminalPending = false;
                         EndAllRemoteReceiveHuds(ch, rxState, (_, remoteCallsign, remoteClientId) =>
                             RaiseRemoteTransmissionEnded(ch, remoteCallsign, remoteClientId));
                     }
@@ -1109,42 +2011,87 @@ namespace RadioRelay.Client.AudioEngineNs
             }
         }
 
-        /// Mixes the next slice of that band's looping recorded
-        /// static bed into the frame at the profile's tuned noise level,
-        /// advancing (and wrapping) a per-channel read cursor so consecutive
-        /// transmissions continue from wherever the loop last left off
-        /// rather than restarting identically every time.
-        private void MixInBandNoise(RadioChannel channel, RxState rxState, RadioEffectProfile profile, float[] frame)
+        internal static void ActivatePendingReceiveHandoff(RxState rxState, JitterBuffer jitter)
         {
-            if (channel.IsIntercom) return; // no band static on a clean intercom
-
-            var band = RadioBandExtensions.FromFrequencyMHz(channel.Frequency);
-            var loop = SoundLibrary.GetBandNoiseLoop(band);
-            if (loop.Length == 0) return;
-
-            int pos = rxState.NoiseLoopPosition;
-            for (int i = 0; i < frame.Length; i++)
+            PendingReceiveHandoff? pending = null;
+            while (rxState.PendingHandoffs.Count > 0)
             {
-                frame[i] = Math.Clamp(frame[i] + loop[pos] * profile.NoiseGainLinear, -1f, 1f);
-                pos++;
-                if (pos >= loop.Length) pos = 0;
+                pending = rxState.PendingHandoffs[0];
+                rxState.PendingHandoffs.RemoveAt(0);
+                if (pending.Frames.Count > 0) break;
+                pending = null;
             }
-            rxState.NoiseLoopPosition = pos;
+            if (pending == null) return;
+
+            rxState.PendingTransmissionAudioSeed = pending.AudioSeed;
+            rxState.PendingRemoteClientId = pending.Transmission.HudId;
+            rxState.PendingRemoteCallsign = pending.Callsign;
+            rxState.PendingReceiverOffsetMHz = pending.ReceiverOffsetMHz;
+
+            bool acceptedAny = false;
+            bool acceptedTerminal = false;
+            for (int i = 0; i < pending.Frames.Count; i++)
+            {
+                var frame = pending.Frames[i];
+                bool establish = i == 0;
+                bool accepted = jitter.OnFrameReceived(
+                    pending.Transmission.TransmissionId,
+                    frame.Sequence,
+                    frame.OpusPayload,
+                    isStart: establish || frame.IsStart,
+                    isEnd: frame.IsEnd,
+                    establish ? JitterAcquisitionMode.Buffered : JitterAcquisitionMode.None);
+                acceptedAny |= accepted;
+                acceptedTerminal |= accepted && frame.IsEnd;
+            }
+
+            rxState.HasAudibleReceiveInFlight = acceptedAny;
+            rxState.IsAudibleTransmissionTerminalPending = acceptedTerminal;
+            if (acceptedAny)
+            {
+                // Give deferred playout a fresh stale timeout when it becomes active.
+                rxState.LastRemotePacketUtc = DateTime.UtcNow;
+            }
         }
 
-        /// Destructively damages the captured signal while another
-        /// audible transmitter overlaps the same frequency. This avoids
-        /// playing a constant recorded squelch loop for listeners; instead,
-        /// the samples themselves get multipath cancellation, flutter/chop,
-        /// scratch, whoosh, and hiss.
+        private static PendingReceiveHandoff? FindPendingReceiveHandoff(
+            RxState rxState,
+            RadioTransmissionKey transmission) =>
+            rxState.PendingHandoffs.FirstOrDefault(candidate =>
+                candidate.Transmission == transmission);
+
+        /// <summary>
+        /// Applies destructive co-channel interference to captured audio.
+        /// </summary>
         private void MixCoChannelInterference(RadioChannel channel, RxState rxState, float[] frame)
         {
             if (channel.IsIntercom) return;
-            rxState.CollisionDestruction.Process(frame, rxState.Interference.HasInterference);
+            rxState.CollisionDestruction.Process(
+                frame,
+                rxState.Interference.HasInterference,
+                RadioBandExtensions.FromFrequencyMHz(channel.Frequency));
         }
 
-        /// Plays a beep centered (both ears), independent of any
-        /// radio channel, when the client successfully connects to a server.
+        private byte[] RenderFilteredReceiveCue(
+            RadioChannel channel,
+            RxState rxState,
+            float[] cue,
+            float postFilterGain)
+        {
+            var profile = GetRxProfile(channel, rxState);
+            var filtered = RadioReceiveFrameProcessor.ProcessSamples(
+                ScaleVolume(cue, OutputClickVolume),
+                channel,
+                profile,
+                rxState.Noise);
+            rxState.Detuning.Process(filtered);
+            MixCoChannelInterference(channel, rxState, filtered);
+            return FloatsToPcm(ScaleVolume(filtered, postFilterGain));
+        }
+
+        /// <summary>
+        /// Plays the centered connection cue.
+        /// </summary>
         public void PlayConnectedBeep()
         {
             lock (_stateLock)
@@ -1155,8 +2102,9 @@ namespace RadioRelay.Client.AudioEngineNs
             }
         }
 
-        /// Plays a beep centered (both ears), independent of any
-        /// radio channel, when the client disconnects from a server.
+        /// <summary>
+        /// Plays the centered disconnection cue.
+        /// </summary>
         public void PlayDisconnectedBeep()
         {
             lock (_stateLock)
@@ -1219,17 +2167,49 @@ namespace RadioRelay.Client.AudioEngineNs
 
         public void Dispose()
         {
+            System.Threading.Thread? micProcessingThread;
             lock (_stateLock)
             {
+                if (_disposed) return;
+                _disposed = true;
                 _jitterTicker.Dispose();
+                if (_waveIn != null)
+                    _waveIn.DataAvailable -= OnMicDataAvailable;
                 _waveIn?.StopRecording();
                 _waveIn?.Dispose();
                 _waveIn = null;
+                lock (_micCaptureProducerLock)
+                    _micProcessingStopping = true;
+                while (_micCaptureQueue.TryDequeue(out _))
+                    System.Threading.Interlocked.Decrement(ref _micCaptureQueueCount);
+                System.Threading.Interlocked.Exchange(ref _micCaptureQueueCount, 0);
+                _micCaptureSignal.Set();
+                micProcessingThread = _micProcessingThread;
+                _micProcessingThread = null;
+                _isMicTestActive = false;
+                lock (_micTestBuffer)
+                    _micTestBuffer.ClearBuffer();
                 _waveOut?.Stop();
                 _waveOut?.Dispose();
                 _waveOut = null;
+                _passthroughWasapiOut?.Stop();
+                _passthroughWasapiOut?.Dispose();
+                _passthroughWasapiOut = null;
+                _passthroughDevice?.Dispose();
+                _passthroughDevice = null;
+                _passthroughDeviceId = null;
+                _passthroughProcessor.Reset();
+                _passthroughOutputConverter.Reset();
+                _secureCodec.ClearTransmitStreams();
+                lock (_passthroughBuffer)
+                    _passthroughBuffer.ClearBuffer();
 
             }
+
+            if (micProcessingThread != null && micProcessingThread != System.Threading.Thread.CurrentThread)
+                micProcessingThread.Join(TimeSpan.FromSeconds(1));
+            _micCaptureSignal.Dispose();
         }
+
     }
 }

@@ -1,8 +1,8 @@
 namespace RadioRelay.Shared.Protocol
 {
-    /// 
+    /// <summary>
     /// First byte of every UDP datagram exchanged with the relay server.
-    /// 
+    /// </summary>
     public enum PacketType : byte
     {
         Audio = 1,
@@ -10,17 +10,14 @@ namespace RadioRelay.Shared.Protocol
         Heartbeat = 3,
         Disconnect = 4,
 
-        /// Sent by the server back to a client immediately upon
-        /// receiving a Subscribe or Heartbeat from it. Lets the client
-        /// actually verify the server is alive and reachable, rather than
-        /// just assuming a UDP "connect" succeeded (UDP has no handshake,
-        /// so without this a client has no way to distinguish "connected
-        /// and working" from "sending into a void").
+        /// <summary>
+        /// Acknowledges subscriptions and heartbeats for bidirectional reachability checks.
+        /// </summary>
         HeartbeatAck = 5,
 
-        /// Broadcast by the server whenever subscription presence
-        /// changes. Each entry is grouped by frequency plus net/key hash so
-        /// keyed radios only show users on the same key.
+        /// <summary>
+        /// Broadcasts membership grouped by frequency and net hash.
+        /// </summary>
         PresenceUpdate = 6
     }
 }

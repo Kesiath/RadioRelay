@@ -6,9 +6,9 @@ using NAudio.Wave;
 
 namespace RadioRelay.Client.AudioEngineNs
 {
-    /// Lists available microphone/speaker devices via the same
-    /// WinMM device indices that WaveInEvent/WaveOutEvent's DeviceNumber
-    /// uses, so a device picked here can be passed straight through.
+    /// <summary>
+    /// Enumerates WinMM input and output devices with user-facing names.
+    /// </summary>
     public static class AudioDeviceEnumerator
     {
         public static List<(int Index, string Name)> GetInputDevices()
@@ -35,6 +35,27 @@ namespace RadioRelay.Client.AudioEngineNs
             return list;
         }
 
+        /// <summary>
+        /// Enumerates stable Core Audio render endpoints for WASAPI output.
+        /// </summary>
+        public static List<(string Id, string Name)> GetOutputEndpoints()
+        {
+            try
+            {
+                using var enumerator = new MMDeviceEnumerator();
+                return enumerator
+                    .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                    .Select(device => (device.ID, device.FriendlyName))
+                    .Where(device => !string.IsNullOrWhiteSpace(device.ID) &&
+                        !string.IsNullOrWhiteSpace(device.FriendlyName))
+                    .ToList();
+            }
+            catch
+            {
+                return new List<(string, string)>();
+            }
+        }
+
         private static List<string> GetCoreAudioNames(DataFlow flow)
         {
             try
@@ -48,8 +69,7 @@ namespace RadioRelay.Client.AudioEngineNs
             }
             catch
             {
-                // Core Audio discovery is an enhancement to the labels only.
-                // Keep the working WinMM list if endpoint metadata is unavailable.
+                // Keep WinMM labels when Core Audio metadata is unavailable.
                 return new List<string>();
             }
         }

@@ -15,22 +15,22 @@ namespace RadioRelay.Client.AudioEngineNs
         public bool EndedPrimarySender { get; init; }
     }
 
-    /// 
-    /// Models simple FM-style co-channel behavior for one receiver: the first
-    /// audible transmitter captures the receiver, later overlapping
-    /// transmitters create interference/noise but do not play as independent
-    /// local squelch sounds or take over the jitter stream mid-transmission.
-    /// 
+    /// <summary>
+    /// Tracks FM capture and co-channel interference for one receiver.
+    /// </summary>
     internal sealed class RadioInterferenceTracker
     {
-        private readonly HashSet<Guid> _activeSenders = new();
-        private Guid? _primarySenderId;
+        private readonly HashSet<RadioTransmissionKey> _activeSenders = new();
+        private RadioTransmissionKey? _primarySenderId;
 
         public bool HasPrimarySender => _primarySenderId.HasValue;
 
         public bool HasInterference => _primarySenderId.HasValue && _activeSenders.Count > 1;
 
-        public InterferenceStartDecision ObserveTransmissionStart(Guid senderId)
+        public InterferenceStartDecision ObserveTransmissionStart(Guid senderId) =>
+            ObserveTransmissionStart(new RadioTransmissionKey(senderId, 0));
+
+        public InterferenceStartDecision ObserveTransmissionStart(RadioTransmissionKey senderId)
         {
             _activeSenders.Add(senderId);
 
@@ -57,7 +57,13 @@ namespace RadioRelay.Client.AudioEngineNs
         public InterferenceStartDecision ObserveMidStreamTransmission(Guid senderId) =>
             ObserveTransmissionStart(senderId);
 
-        public InterferenceEndDecision ObserveTransmissionEnd(Guid senderId)
+        public InterferenceStartDecision ObserveMidStreamTransmission(RadioTransmissionKey senderId) =>
+            ObserveTransmissionStart(senderId);
+
+        public InterferenceEndDecision ObserveTransmissionEnd(Guid senderId) =>
+            ObserveTransmissionEnd(new RadioTransmissionKey(senderId, 0));
+
+        public InterferenceEndDecision ObserveTransmissionEnd(RadioTransmissionKey senderId)
         {
             _activeSenders.Remove(senderId);
             bool endedPrimary = _primarySenderId == senderId;
@@ -67,7 +73,12 @@ namespace RadioRelay.Client.AudioEngineNs
             return new InterferenceEndDecision { EndedPrimarySender = endedPrimary };
         }
 
-        public bool ShouldAcceptAudioFrom(Guid senderId) => _primarySenderId == senderId;
+        public bool ShouldAcceptAudioFrom(Guid senderId) =>
+            ShouldAcceptAudioFrom(new RadioTransmissionKey(senderId, 0));
+
+        public bool ShouldAcceptAudioFrom(RadioTransmissionKey senderId) => _primarySenderId == senderId;
+
+        public bool IsActive(RadioTransmissionKey senderId) => _activeSenders.Contains(senderId);
 
         public void Reset()
         {

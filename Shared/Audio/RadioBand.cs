@@ -1,15 +1,13 @@
 namespace RadioRelay.Shared.Audio
 {
-    /// Which real-world radio band a frequency falls into. Drives
-    /// both the tunable DSP effect chain AND which recorded background
-    /// static loop plays underneath received audio -- so tuning a radio
-    /// from 251 MHz to 8 MHz should audibly change its whole character, the
-    /// same way switching between a UHF and an HF set would in real life.
+    /// <summary>
+    /// Selects band-specific DSP and receiver-noise characteristics.
+    /// </summary>
     public enum RadioBand
     {
-        HF,   // ~2-30 MHz
-        VHF,  // ~30-300 MHz
-        UHF   // ~300 MHz and up
+        HF,   // About 2-30 MHz.
+        VHF,  // About 30-300 MHz.
+        UHF   // About 300 MHz and above.
     }
 
     public static class RadioBandExtensions

@@ -2,10 +2,9 @@ using System;
 
 namespace RadioRelay.Shared.Audio
 {
-    /// 
-    /// Digital biquad filter (RBJ Audio Cookbook coefficients). Used to shape
-    /// the voice band into a narrow radio-like passband before transmission.
-    /// 
+    /// <summary>
+    /// Implements RBJ biquad filters for radio passband shaping.
+    /// </summary>
     public class BiQuadFilter
     {
         private double _b0, _b1, _b2, _a1, _a2;
@@ -25,10 +24,9 @@ namespace RadioRelay.Shared.Audio
             return f;
         }
 
-        /// Constant skirt-gain bandpass, peaking at centerHz. Used
-        /// to shape flat white noise into narrowband "radio hiss" that
-        /// sits in the same band as the voice signal, rather than the
-        /// full-spectrum hiss a raw random() noise floor produces.
+        /// <summary>
+        /// Creates a constant skirt-gain band-pass filter centered at <paramref name="centerHz"/>.
+        /// </summary>
         public static BiQuadFilter BandPass(float sampleRate, float centerHz, double q = 0.9)
         {
             var f = new BiQuadFilter();
@@ -36,10 +34,9 @@ namespace RadioRelay.Shared.Audio
             return f;
         }
 
-        /// RBJ peaking EQ -- boosts (positive gainDb) or cuts
-        /// (negative gainDb) a band centered at centerHz, leaving the rest
-        /// of the spectrum roughly unaffected. Used for the "presence" style
-        /// boost that gives narrowband radio voice its characteristic edge.
+        /// <summary>
+        /// Creates a peaking EQ centered at <paramref name="centerHz"/>.
+        /// </summary>
         public static BiQuadFilter Peaking(float sampleRate, float centerHz, double q, float gainDb)
         {
             var f = new BiQuadFilter();

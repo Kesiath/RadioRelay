@@ -119,6 +119,49 @@ public class RelayServerRobustnessTests
     }
 
     [Fact]
+    public async Task Subscribe_from_different_endpoint_does_not_hijack_registered_client()
+    {
+        int port = GetAvailableUdpPort();
+        using var cts = new CancellationTokenSource();
+        var server = new RelayServer(port);
+        var runTask = server.RunAsync(cts.Token);
+
+        try
+        {
+            await Task.Delay(150);
+
+            using var talker = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            using var listener = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            using var attacker = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            var talkerId = Guid.NewGuid();
+
+            await SendSubscribe(talker, port, talkerId, 251.000f);
+            await SendSubscribe(listener, port, Guid.NewGuid(), 251.000f);
+            await SendSubscribe(attacker, port, talkerId, 305.000f);
+            await Task.Delay(150);
+
+            var audio = new AudioPacket
+            {
+                ClientId = talkerId,
+                Frequency = 251.000f,
+                SenderName = "Talker",
+                RadioName = "Radio",
+                Payload = new byte[] { 5, 6, 7, 8 }
+            }.Encode();
+            await talker.SendAsync(audio, audio.Length, new IPEndPoint(IPAddress.Loopback, port));
+
+            var relayed = await ReceivePacket(listener, PacketType.Audio, TimeSpan.FromSeconds(2));
+            Assert.NotNull(relayed);
+            Assert.Equal(2, server.ConnectedClients);
+        }
+        finally
+        {
+            cts.Cancel();
+            await WaitForServerToStop(runTask);
+        }
+    }
+
+    [Fact]
     public async Task Disconnect_from_different_endpoint_does_not_remove_registered_client()
     {
         int port = GetAvailableUdpPort();
@@ -214,7 +257,10 @@ public class RelayServerRobustnessTests
         if (completed == runTask)
         {
             try { await runTask; }
-            catch { /* Preserve the original assertion failure when the server crashed before cancellation. */ }
+            catch
+            {
+                // Preserve the original assertion failure.
+            }
         }
     }
 

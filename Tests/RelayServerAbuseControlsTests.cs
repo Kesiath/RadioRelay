@@ -38,28 +38,77 @@ public class RelayServerAbuseControlsTests
     }
 
     [Fact]
-    public async Task Rate_limited_endpoint_packets_are_dropped_without_stopping_server()
+    public async Task Registered_clients_behind_same_ip_have_independent_control_buckets()
     {
         int port = GetAvailableUdpPort();
         using var cts = new CancellationTokenSource();
-        var server = new RelayServer(port, "", new RelayServerOptions { MaxDatagramsPerIpPerSecond = 1 });
+        var server = new RelayServer(port, "", new RelayServerOptions
+        {
+            MaxControlDatagramsPerClientPerSecond = 1,
+            ControlDatagramBurstPerClient = 1
+        });
         var runTask = server.RunAsync(cts.Token);
 
         try
         {
             await Task.Delay(150);
 
-            using var rateLimited = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
-            var rateLimitedId = Guid.NewGuid();
-            await SendSubscribe(rateLimited, port, rateLimitedId, 251.000f);
-            Assert.True(await ReceivesAck(rateLimited, TimeSpan.FromSeconds(2)));
-            await SendSubscribe(rateLimited, port, rateLimitedId, 251.000f);
+            using var first = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            using var second = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            var firstId = Guid.NewGuid();
+            var secondId = Guid.NewGuid();
+            await SendSubscribe(first, port, firstId, 251.000f);
+            await SendSubscribe(second, port, secondId, 251.000f);
+            Assert.True(await ReceivesAck(first, TimeSpan.FromSeconds(2)));
+            Assert.True(await ReceivesAck(second, TimeSpan.FromSeconds(2)));
 
-            using var otherClient = new UdpClient(new IPEndPoint(IPAddress.Parse("127.0.0.2"), 0));
-            await SendSubscribe(otherClient, port, Guid.NewGuid(), 251.000f);
+            await SendHeartbeat(first, port, firstId);
+            Assert.True(await ReceivesAck(first, TimeSpan.FromSeconds(2)));
 
-            Assert.False(await ReceivesAck(rateLimited, TimeSpan.FromMilliseconds(300)));
-            Assert.True(await ReceivesAck(otherClient, TimeSpan.FromSeconds(2)));
+            await SendHeartbeat(first, port, firstId);
+            await SendHeartbeat(second, port, secondId);
+
+            Assert.False(await ReceivesAck(first, TimeSpan.FromMilliseconds(300)));
+            Assert.True(await ReceivesAck(second, TimeSpan.FromSeconds(2)));
+            Assert.False(runTask.IsCompleted);
+        }
+        finally
+        {
+            cts.Cancel();
+            await WaitForServerToStop(runTask);
+        }
+    }
+
+    [Fact]
+    public async Task Audio_bucket_exhaustion_does_not_suppress_control_traffic()
+    {
+        int port = GetAvailableUdpPort();
+        using var cts = new CancellationTokenSource();
+        var server = new RelayServer(port, "", new RelayServerOptions
+        {
+            MaxAudioDatagramsPerClientPerSecond = 1,
+            AudioDatagramBurstPerClient = 1
+        });
+        var runTask = server.RunAsync(cts.Token);
+
+        try
+        {
+            await Task.Delay(150);
+            using var sender = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            using var receiver = new UdpClient(new IPEndPoint(IPAddress.Loopback, 0));
+            var senderId = Guid.NewGuid();
+            var receiverId = Guid.NewGuid();
+            await SendSubscribe(sender, port, senderId, 251.000f);
+            await SendSubscribe(receiver, port, receiverId, 251.000f);
+            Assert.True(await ReceivesAck(sender, TimeSpan.FromSeconds(2)));
+            Assert.True(await ReceivesAck(receiver, TimeSpan.FromSeconds(2)));
+
+            await SendAudio(sender, port, senderId, 251.000f, sequence: 0);
+            await SendAudio(sender, port, senderId, 251.000f, sequence: 1);
+            Assert.Equal(1, await CountAudio(receiver, TimeSpan.FromMilliseconds(300)));
+
+            await SendHeartbeat(sender, port, senderId);
+            Assert.True(await ReceivesAck(sender, TimeSpan.FromSeconds(2)));
             Assert.False(runTask.IsCompleted);
         }
         finally
@@ -156,6 +205,42 @@ public class RelayServerAbuseControlsTests
             Frequencies = new[] { frequency }
         }.Encode();
         return client.SendAsync(packet, packet.Length, new IPEndPoint(IPAddress.Loopback, port));
+    }
+
+    private static Task SendHeartbeat(UdpClient client, int port, Guid clientId)
+    {
+        var packet = new HeartbeatPacket { ClientId = clientId }.Encode();
+        return client.SendAsync(packet, packet.Length, new IPEndPoint(IPAddress.Loopback, port));
+    }
+
+    private static Task SendAudio(UdpClient client, int port, Guid clientId, float frequency, ushort sequence)
+    {
+        var packet = new AudioPacket
+        {
+            ClientId = clientId,
+            Frequency = frequency,
+            Sequence = sequence,
+            IsTransmissionStart = sequence == 0,
+            SenderName = "Test",
+            RadioName = "RADIO 1",
+            Payload = new byte[] { 1, 2, 3 }
+        }.Encode();
+        return client.SendAsync(packet, packet.Length, new IPEndPoint(IPAddress.Loopback, port));
+    }
+
+    private static async Task<int> CountAudio(UdpClient client, TimeSpan duration)
+    {
+        int count = 0;
+        var deadline = DateTime.UtcNow + duration;
+        while (DateTime.UtcNow < deadline)
+        {
+            var received = await TryReceiveAsync(client, deadline - DateTime.UtcNow);
+            if (received == null) break;
+            if (received.Value.Buffer.Length > 0 &&
+                PacketPeek.GetType(received.Value.Buffer) == PacketType.Audio)
+                count++;
+        }
+        return count;
     }
 
     private static async Task<bool> ReceivesAck(UdpClient client, TimeSpan timeout)

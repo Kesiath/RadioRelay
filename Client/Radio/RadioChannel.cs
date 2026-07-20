@@ -9,19 +9,16 @@ namespace RadioRelay.Client.Radio
         public string Passcode { get; set; } = "";
     }
 
-    /// 
-    /// One tunable "radio" (or intercom) in the client UI. Frequency, not
-    /// channel name, is what determines who you talk to and hear. Passcode
-    /// determines who among those on-frequency can actually decrypt you --
-    /// leave it blank for an open/unencrypted radio. Each radio has its own
-    /// independently-bindable push-to-talk triggers (two independent slots);
-    /// whether you're "listening" on a radio is simply a function of its
-    /// Volume.
-    /// 
+    /// <summary>
+    /// Models one tunable radio or intercom with presets, routing, security,
+    /// volume, and HUD configuration.
+    /// </summary>
     public class RadioChannel
     {
         public const int PresetCount = 9;
+        public const float MaxReceiveVolume = 3.0f;
         private readonly RadioPreset[] _presets = new RadioPreset[PresetCount];
+        private float _volume = 1.0f;
 
         public RadioChannel()
         {
@@ -34,25 +31,31 @@ namespace RadioRelay.Client.Radio
         public float Frequency { get; set; } = 251.000f;
         public float DefaultFrequency { get; private set; } = 251.000f;
         public int SelectedChannel { get; private set; } = 1;
-        public float Volume { get; set; } = 1.0f; // 0..1 -- 0 is effectively "not listening"
+        public float Volume
+        {
+            get => _volume;
+            set => _volume = Math.Clamp(value, 0f, MaxReceiveVolume);
+        }
         public bool IsIntercom { get; set; } = false;
 
-        /// Blank = unencrypted/open. Non-blank = only other radios
-        /// with this exact passcode typed in can decrypt this radio's
-        /// traffic. Derived into an actual key via NetOption.FromPasscode.
+        /// <summary>
+        /// Passcode used to derive the selected net; blank means unencrypted.
+        /// </summary>
         public string Passcode { get; set; } = "";
 
-        /// Which ear(s) this radio's received audio plays in.
+        /// <summary>
+        /// Output channel for received audio.
+        /// </summary>
         public RadioEar Ear { get; set; } = RadioEar.Both;
 
-        /// The accent color shown on this radio's on-screen
-        /// transmission HUD chip, so multiple simultaneously-active radios
-        /// are easy to tell apart at a glance.
+        /// <summary>
+        /// Accent color for this radio's HUD activity chip.
+        /// </summary>
         public Color HudColor { get; set; } = Color.FromArgb(90, 160, 235);
 
-        /// Top-left position of this radio's HUD chip, in screen
-        /// coordinates. Null means "not customized yet" -- the HUD falls
-        /// back to an automatic cascading default position.
+        /// <summary>
+        /// Custom HUD chip position; null uses automatic placement.
+        /// </summary>
         public Point? HudPosition { get; set; }
 
         public NetOption SelectedNet => NetOption.FromPasscode(Passcode);

@@ -4,7 +4,9 @@ using System.Drawing.Drawing2D;
 
 namespace RadioRelay.Client.UI
 {
-    /// <summary>Shared modern dark palette and typography for the client UI.</summary>
+    /// <summary>
+    /// Defines the client UI palette and typography.
+    /// </summary>
     public static class Theme
     {
         public static readonly Color Background = Color.FromArgb(9, 12, 16);
@@ -45,10 +47,7 @@ namespace RadioRelay.Client.UI
             if (bounds.Width <= 0 || bounds.Height <= 0)
                 return new GraphicsPath();
 
-            // Rectangle.Right and Rectangle.Bottom are exclusive coordinates.
-            // Using them directly places the right/bottom path one pixel outside
-            // the control's drawable area, so GDI+ clips those border segments.
-            // Keep every point on an inclusive pixel coordinate instead.
+            // Keep the path within inclusive drawable coordinates.
             float left = bounds.Left;
             float top = bounds.Top;
             float right = bounds.Right - 1f;

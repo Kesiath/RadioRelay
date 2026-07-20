@@ -1,6 +1,8 @@
 namespace RadioRelay.Client.UI
 {
-    /// <summary>Shared dimensions and layout budgets for the fixed-width main window.</summary>
+    /// <summary>
+    /// Defines dimensions and layout budgets for the fixed-width main window.
+    /// </summary>
     public static class MainFormLayoutPolicy
     {
         public const int HorizontalMargin = 18;

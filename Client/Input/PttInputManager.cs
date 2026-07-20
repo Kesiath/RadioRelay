@@ -6,24 +6,15 @@ using RadioRelay.Client.Radio;
 
 namespace RadioRelay.Client.Input
 {
-    /// Which of a radio's two independent PTT slots a binding
-    /// occupies. Either slot alone triggers that radio -- e.g. bind Primary
-    /// to a HOTAS button and Secondary to a keyboard key, and pressing
-    /// either one transmits.
+    /// <summary>
+    /// Identifies one of a radio's two independent PTT bindings.
+    /// </summary>
     public enum PttSlot { Primary = 0, Secondary = 1 }
 
-    /// 
-    /// Fires PttDown/PttUp -- tagged with which RadioChannel it's for -- for
-    /// whichever input (keyboard key or joystick/gamepad button) is bound to
-    /// each radio. Every radio has two independent binding slots (Primary +
-    /// Secondary); pressing either one transmits on that radio, and holding
-    /// both at once still only counts as "down" once (releasing one while
-    /// the other is still held does not end the transmission). Every radio's
-    /// bindings are independent of every other radio's, so two radios can be
-    /// keyed simultaneously if their bindings are physically different
-    /// buttons. Also supports a "capture next input" mode, scoped to a
-    /// single (channel, slot) pair at a time, for the "Set PTT" flow.
-    /// 
+    /// <summary>
+    /// Maps keyboard, mouse, and joystick input to per-radio PTT state and
+    /// supports capture of new bindings.
+    /// </summary>
     public class PttInputManager : IDisposable
     {
         private const int SlotCount = 2;
@@ -34,6 +25,7 @@ namespace RadioRelay.Client.Input
 
         private readonly Dictionary<RadioChannel, PttBinding?[]> _bindings = new();
         private readonly Dictionary<RadioChannel, bool[]> _slotDown = new();
+        private readonly object _stateLock = new();
 
         private RadioChannel? _capturingChannel;
         private PttSlot _capturingSlot;
@@ -64,10 +56,19 @@ namespace RadioRelay.Client.Input
 
         public IEnumerable<(Guid Guid, string Name)> GetJoystickDevices() => _joystick.GetDeviceNames();
 
-        public PttBinding? GetBinding(RadioChannel channel, PttSlot slot) =>
-            _bindings.TryGetValue(channel, out var slots) ? slots[(int)slot] : null;
+        public PttBinding? GetBinding(RadioChannel channel, PttSlot slot)
+        {
+            lock (_stateLock)
+                return _bindings.TryGetValue(channel, out var slots) ? slots[(int)slot] : null;
+        }
 
         public void SetBinding(RadioChannel channel, PttSlot slot, PttBinding? binding)
+        {
+            lock (_stateLock)
+                SetBindingLocked(channel, slot, binding);
+        }
+
+        private void SetBindingLocked(RadioChannel channel, PttSlot slot, PttBinding? binding)
         {
             if (!_bindings.TryGetValue(channel, out var slots))
             {
@@ -75,46 +76,88 @@ namespace RadioRelay.Client.Input
                 _bindings[channel] = slots;
                 _slotDown[channel] = new bool[SlotCount];
             }
+
+            bool wasDownOverall = _channelWasDown.TryGetValue(channel, out var previous) && previous;
             slots[(int)slot] = binding;
             _slotDown[channel][(int)slot] = false;
+            bool isDownOverall = _slotDown[channel][0] || _slotDown[channel][1];
+            _channelWasDown[channel] = isDownOverall;
+
+            // Release a keyed radio when rebinding removes its last held slot.
+            if (wasDownOverall && !isDownOverall)
+                SafeInvoke(PttUp, channel);
         }
 
-        /// Listens for the next keyboard key or joystick button
-        /// press from any device and reports it back via callback, binding
-        /// it to the given (channel, slot). Does not affect any other
-        /// binding. Only one capture can be active at a time.
+        /// <summary>
+        /// Captures the next input for one channel and slot.
+        /// </summary>
         public void StartCapture(RadioChannel channel, PttSlot slot, Action<PttBinding?> onCaptured)
         {
-            _capturingIcpToggle = false;
-            _capturingChannel = channel;
-            _capturingSlot = slot;
-            _captureCallback = onCaptured;
+            lock (_stateLock)
+            {
+                ReleaseAllPttStatesLocked();
+                _capturingIcpToggle = false;
+                _capturingChannel = channel;
+                _capturingSlot = slot;
+                _captureCallback = onCaptured;
+            }
         }
 
-        public PttBinding? GetIcpToggleBinding() => _icpToggleBinding;
+        public PttBinding? GetIcpToggleBinding()
+        {
+            lock (_stateLock) return _icpToggleBinding;
+        }
 
         public void SetIcpToggleBinding(PttBinding? binding)
         {
-            _icpToggleBinding = binding;
-            _icpToggleDown = false;
+            lock (_stateLock)
+            {
+                _icpToggleBinding = binding;
+                _icpToggleDown = false;
+            }
         }
 
         public void StartIcpToggleCapture(Action<PttBinding?> onCaptured)
         {
-            _capturingChannel = null;
-            _capturingIcpToggle = true;
-            _captureCallback = onCaptured;
+            lock (_stateLock)
+            {
+                ReleaseAllPttStatesLocked();
+                _capturingChannel = null;
+                _capturingIcpToggle = true;
+                _captureCallback = onCaptured;
+            }
         }
 
         public void CancelCapture()
         {
-            _capturingChannel = null;
-            _capturingIcpToggle = false;
-            _captureCallback = null;
+            lock (_stateLock)
+            {
+                _capturingChannel = null;
+                _capturingIcpToggle = false;
+                _captureCallback = null;
+            }
         }
 
         internal void HandleRawInputForTest(PttBindingType type, Guid deviceGuid, int code, bool pressed) =>
             OnRawInput(type, deviceGuid, code, pressed);
+
+        internal void ReleaseAllPttStates()
+        {
+            lock (_stateLock)
+                ReleaseAllPttStatesLocked();
+        }
+
+        private void ReleaseAllPttStatesLocked()
+        {
+            foreach (var channel in _bindings.Keys.ToList())
+            {
+                bool wasDown = _channelWasDown.TryGetValue(channel, out var previous) && previous;
+                if (_slotDown.TryGetValue(channel, out var slots))
+                    Array.Clear(slots, 0, slots.Length);
+                _channelWasDown[channel] = false;
+                if (wasDown) SafeInvoke(PttUp, channel);
+            }
+        }
 
         private static PttBinding CreateBinding(PttBindingType type, Guid deviceGuid, int code) => type switch
         {
@@ -141,6 +184,12 @@ namespace RadioRelay.Client.Input
 
         private void OnRawInput(PttBindingType type, Guid deviceGuid, int code, bool pressed)
         {
+            lock (_stateLock)
+                OnRawInputLocked(type, deviceGuid, code, pressed);
+        }
+
+        private void OnRawInputLocked(PttBindingType type, Guid deviceGuid, int code, bool pressed)
+        {
             if (_capturingIcpToggle)
             {
                 if (!pressed) return;
@@ -165,7 +214,7 @@ namespace RadioRelay.Client.Input
             if (_capturingChannel != null)
             {
                 if (!pressed)
-                    return; // bind on press, not release
+                    return; // Bind on press, not release.
 
                 var callback = _captureCallback;
                 var channel = _capturingChannel;
@@ -205,9 +254,7 @@ namespace RadioRelay.Client.Input
                 if (pressed && !wasDown) SafeInvoke(IcpTogglePressed);
             }
 
-            // A single physical input can legitimately be bound to more than
-            // one radio (or more than one slot on the same radio, though
-            // that's redundant) -- fire for every channel with a matching slot.
+            // Apply one physical input to every matching radio binding.
             foreach (var kvp in _bindings.ToList())
             {
                 var channel = kvp.Key;
@@ -229,9 +276,7 @@ namespace RadioRelay.Client.Input
 
                 if (!anyMatchedThisChannel) continue;
 
-                // The channel counts as "down" if EITHER slot is currently
-                // held -- releasing one bound key while the other is still
-                // held must not end the transmission.
+                // Keep the channel keyed while either slot remains held.
                 bool wasDownOverall = _channelWasDown.TryGetValue(channel, out var prev) && prev;
                 bool isDownOverall = downFlags[0] || downFlags[1];
 
@@ -258,7 +303,10 @@ namespace RadioRelay.Client.Input
             foreach (Action<T> subscriber in handler.GetInvocationList().Cast<Action<T>>())
             {
                 try { subscriber(arg); }
-                catch { /* Input hook callbacks must not be killed by UI shutdown/subscriber failures. */ }
+                catch
+                {
+                    // Isolate input hooks from subscriber and shutdown failures.
+                }
             }
         }
 
@@ -274,6 +322,7 @@ namespace RadioRelay.Client.Input
 
         public void Dispose()
         {
+            ReleaseAllPttStates();
             _keyboard.Dispose();
             _mouse.Dispose();
             _joystick.Dispose();

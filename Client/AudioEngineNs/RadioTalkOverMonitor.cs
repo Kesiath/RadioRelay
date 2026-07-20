@@ -3,22 +3,23 @@ using System.Collections.Generic;
 
 namespace RadioRelay.Client.AudioEngineNs
 {
-    /// 
-    /// Tracks whether this local user is transmitting while any audible remote
-    /// user is also keyed on the same receiver. It returns true only on the
-    /// transition into overlap, so the talk-over warning plays once per
-    /// overlap episode instead of looping for every audio packet.
-    /// 
+    /// <summary>
+    /// Detects the start of local and remote transmission overlap on one receiver.
+    /// </summary>
     internal sealed class RadioTalkOverMonitor
     {
-        private readonly HashSet<Guid> _remoteTransmitters = new();
+        private readonly HashSet<RadioTransmissionKey> _remoteTransmitters = new();
         private bool _hasWarnedForCurrentOverlap;
 
         public bool IsLocalTransmitting { get; private set; }
         public bool HasRemoteTransmitters => _remoteTransmitters.Count > 0;
         public bool HasActiveOverlap => IsLocalTransmitting && HasRemoteTransmitters;
 
-        public bool IsRemoteTransmitting(Guid senderId) => _remoteTransmitters.Contains(senderId);
+        public bool IsRemoteTransmitting(Guid senderId) =>
+            IsRemoteTransmitting(new RadioTransmissionKey(senderId, 0));
+
+        public bool IsRemoteTransmitting(RadioTransmissionKey senderId) =>
+            _remoteTransmitters.Contains(senderId);
 
         public bool SetLocalTransmitting(bool active)
         {
@@ -34,13 +35,19 @@ namespace RadioRelay.Client.AudioEngineNs
             return TryEnterOverlap();
         }
 
-        public bool ObserveRemoteTransmissionStart(Guid senderId)
+        public bool ObserveRemoteTransmissionStart(Guid senderId) =>
+            ObserveRemoteTransmissionStart(new RadioTransmissionKey(senderId, 0));
+
+        public bool ObserveRemoteTransmissionStart(RadioTransmissionKey senderId)
         {
             if (!_remoteTransmitters.Add(senderId)) return false;
             return TryEnterOverlap();
         }
 
-        public void ObserveRemoteTransmissionEnd(Guid senderId)
+        public void ObserveRemoteTransmissionEnd(Guid senderId) =>
+            ObserveRemoteTransmissionEnd(new RadioTransmissionKey(senderId, 0));
+
+        public void ObserveRemoteTransmissionEnd(RadioTransmissionKey senderId)
         {
             _remoteTransmitters.Remove(senderId);
             if (_remoteTransmitters.Count == 0)

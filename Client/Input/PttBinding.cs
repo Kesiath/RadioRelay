@@ -6,8 +6,8 @@ namespace RadioRelay.Client.Input
 
     public static class MousePttButtons
     {
-        public const int XButton1 = 1; // Windows XBUTTON1, typically physical mouse button 4 / Back
-        public const int XButton2 = 2; // Windows XBUTTON2, typically physical mouse button 5 / Forward
+        public const int XButton1 = 1; // Usually mouse button 4 or Back.
+        public const int XButton2 = 2; // Usually mouse button 5 or Forward.
 
         public static string DisplayName(int button) => button switch
         {
@@ -17,16 +17,17 @@ namespace RadioRelay.Client.Input
         };
     }
 
-    /// A single configured PTT trigger -- one keyboard key, one
-    /// mouse side button, or one button on one specific joystick/gamepad device.
+    /// <summary>
+    /// Stores one keyboard, mouse, or joystick PTT trigger.
+    /// </summary>
     public class PttBinding
     {
         public PttBindingType Type { get; set; } = PttBindingType.Keyboard;
 
-        // Keyboard
-        public int KeyCode { get; set; } = 0x14; // VK_CAPITAL
+        // Keyboard binding.
+        public int KeyCode { get; set; } = 0x14; // VK_CAPITAL.
 
-        // Joystick/gamepad
+        // Joystick or gamepad binding.
         public Guid DeviceGuid { get; set; } = Guid.Empty;
         public int ButtonIndex { get; set; }
 

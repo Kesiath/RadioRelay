@@ -1,6 +1,8 @@
 namespace RadioRelay.Shared.Audio.Effects
 {
-    /// DCS-SRS "$type": "highpass" -- removes content below frequencyHz.
+    /// <summary>
+    /// Second-order high-pass; removes content below frequencyHz.
+    /// </summary>
     public class HighPassEffect : IAudioEffect
     {
         private readonly BiQuadFilter _filter;
@@ -15,9 +17,13 @@ namespace RadioRelay.Shared.Audio.Effects
             for (int i = 0; i < samples.Length; i++)
                 samples[i] = _filter.Process(samples[i]);
         }
+
+        public void Reset() => _filter.Reset();
     }
 
-    /// DCS-SRS "$type": "lowpass" -- removes content above frequencyHz.
+    /// <summary>
+    /// Second-order low-pass; removes content above frequencyHz.
+    /// </summary>
     public class LowPassEffect : IAudioEffect
     {
         private readonly BiQuadFilter _filter;
@@ -32,11 +38,13 @@ namespace RadioRelay.Shared.Audio.Effects
             for (int i = 0; i < samples.Length; i++)
                 samples[i] = _filter.Process(samples[i]);
         }
+
+        public void Reset() => _filter.Reset();
     }
 
-    /// DCS-SRS "$type": "peak" -- boosts/cuts a band around
-    /// frequencyHz by gainDb, leaving the rest of the spectrum alone. This is
-    /// what gives narrowband radio voice its characteristic "presence"/edge.
+    /// <summary>
+    /// Applies parametric gain around a center frequency.
+    /// </summary>
     public class PeakEffect : IAudioEffect
     {
         private readonly BiQuadFilter _filter;
@@ -51,5 +59,45 @@ namespace RadioRelay.Shared.Audio.Effects
             for (int i = 0; i < samples.Length; i++)
                 samples[i] = _filter.Process(samples[i]);
         }
+
+        public void Reset() => _filter.Reset();
+    }
+
+    /// <summary>
+    /// Applies a 6 dB-per-octave high-pass at natural radio edges.
+    /// </summary>
+    public sealed class FirstOrderHighPassEffect : IAudioEffect
+    {
+        private readonly FirstOrderFilter _filter;
+
+        public FirstOrderHighPassEffect(int sampleRate, float frequencyHz) =>
+            _filter = FirstOrderFilter.HighPass(sampleRate, frequencyHz);
+
+        public void Process(float[] samples)
+        {
+            for (int i = 0; i < samples.Length; i++)
+                samples[i] = _filter.Process(samples[i]);
+        }
+
+        public void Reset() => _filter.Reset();
+    }
+
+    /// <summary>
+    /// Applies a 6 dB-per-octave low-pass at natural radio edges.
+    /// </summary>
+    public sealed class FirstOrderLowPassEffect : IAudioEffect
+    {
+        private readonly FirstOrderFilter _filter;
+
+        public FirstOrderLowPassEffect(int sampleRate, float frequencyHz) =>
+            _filter = FirstOrderFilter.LowPass(sampleRate, frequencyHz);
+
+        public void Process(float[] samples)
+        {
+            for (int i = 0; i < samples.Length; i++)
+                samples[i] = _filter.Process(samples[i]);
+        }
+
+        public void Reset() => _filter.Reset();
     }
 }

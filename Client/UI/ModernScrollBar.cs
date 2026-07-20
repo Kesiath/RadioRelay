@@ -5,7 +5,9 @@ using System.Windows.Forms;
 
 namespace RadioRelay.Client.UI
 {
-    /// <summary>Owner-drawn vertical scrollbar with keyboard and pointer support.</summary>
+    /// <summary>
+    /// Draws a vertical scrollbar with keyboard and pointer support.
+    /// </summary>
     public sealed class ModernScrollBar : Control
     {
         private const int TrackPadding = 3;

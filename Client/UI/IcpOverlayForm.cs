@@ -2,19 +2,39 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using RadioRelay.Client.Radio;
 
 namespace RadioRelay.Client.UI
 {
-    /// <summary>Clickable, always-on-top radio preset controller inspired by an F-16 ICP.</summary>
+    /// <summary>
+    /// Displays a non-activating, always-on-top radio preset controller.
+    /// </summary>
     public sealed class IcpOverlayForm : Form
     {
+        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        private const int WS_EX_NOACTIVATE = 0x08000000;
+        private const int WM_MOUSEACTIVATE = 0x0021;
+        private const int MA_NOACTIVATE = 3;
+        private const uint SWP_NOSIZE = 0x0001;
+        private const uint SWP_NOMOVE = 0x0002;
+        private const uint SWP_NOACTIVATE = 0x0010;
+        private const uint SWP_SHOWWINDOW = 0x0040;
+        private static readonly IntPtr HwndTopmost = new(-1);
+
         private readonly IReadOnlyList<RadioChannel> _channels;
         private readonly List<ModernButton> _radioButtons = new();
         private readonly List<ModernButton> _channelButtons = new();
         private readonly Label _readout = new();
-        private readonly ModernSlider _volumeSlider = new() { Minimum = 0, Maximum = 100, Enabled = false };
+        private readonly ModernSlider _volumeSlider = new()
+        {
+            Minimum = 0,
+            Maximum = (int)(RadioChannel.MaxReceiveVolume * 100),
+            Enabled = false,
+            FocusOnPointerInteraction = false,
+            TabStop = false
+        };
         private readonly Label _volumeValue = new();
         private RadioChannel? _selectedRadio;
         private int? _pendingChannel;
@@ -105,9 +125,7 @@ namespace RadioRelay.Client.UI
             layout.Controls.Add(keypad, 0, 2);
 
             var actions = CreateGrid(1, 2, 8);
-            // The card already supplies equal outer padding. Keep the action
-            // column flush with that inner right edge and put its separation
-            // from the keypad on the left, avoiding a doubled right gutter.
+            // Put keypad separation on the left to avoid a doubled right gutter.
             actions.Padding = new Padding(0, 0, 0, 8);
             var enter = CreateButton("ENTER");
             enter.Margin = new Padding(6, 0, 0, 6);
@@ -174,8 +192,40 @@ namespace RadioRelay.Client.UI
                 }
                 else if (e.KeyCode == Keys.Enter) Confirm();
             };
-            Deactivate += (_, _) => TopMost = true;
         }
+
+        protected override bool ShowWithoutActivation => true;
+
+        protected override CreateParams CreateParams
+        {
+            get
+            {
+                var parameters = base.CreateParams;
+                parameters.ExStyle |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+                return parameters;
+            }
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            if (message.Msg == WM_MOUSEACTIVATE)
+            {
+                message.Result = (IntPtr)MA_NOACTIVATE;
+                return;
+            }
+
+            base.WndProc(ref message);
+        }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool SetWindowPos(
+            IntPtr window,
+            IntPtr insertAfter,
+            int x,
+            int y,
+            int width,
+            int height,
+            uint flags);
 
         protected override void OnSizeChanged(EventArgs e)
         {
@@ -216,7 +266,8 @@ namespace RadioRelay.Client.UI
             Margin = new Padding(0, 0, 6, 6),
             BackColor = Theme.RaisedBackground,
             ForeColor = Theme.Text,
-            CornerRadius = 7
+            CornerRadius = 7,
+            TabStop = false
         };
 
         public void ToggleOverlay()
@@ -231,7 +282,14 @@ namespace RadioRelay.Client.UI
             EnsureVisibleOnScreen();
             ResetSelection();
             Show();
-            BringToFront();
+            _ = SetWindowPos(
+                Handle,
+                HwndTopmost,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
 
         public void HideAndReset()
@@ -301,7 +359,10 @@ namespace RadioRelay.Client.UI
         {
             _selectedRadio = channel;
             _pendingChannel = null;
-            _pendingVolume = Math.Clamp((int)Math.Round(channel.Volume * 100f), 0, 100);
+            _pendingVolume = Math.Clamp(
+                (int)Math.Round(channel.Volume * 100f),
+                0,
+                (int)(RadioChannel.MaxReceiveVolume * 100));
             _initialVolume = _pendingVolume;
             _volumeSlider.Enabled = true;
             _volumeSlider.Value = _pendingVolume.Value;

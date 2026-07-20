@@ -3,12 +3,9 @@ using System.Runtime.InteropServices;
 
 namespace RadioRelay.Client.Input
 {
-    /// 
-    /// Global low-level keyboard hook. Reports every key up/down system-wide
-    /// (filtering to whichever key is actually bound to PTT happens in
-    /// PttInputManager, uniformly with joystick input) so it works even
-    /// while a game window has focus instead of RadioRelay.
-    /// 
+    /// <summary>
+    /// Reports global keyboard transitions to the PTT binding manager.
+    /// </summary>
     public class PttHook : IDisposable
     {
         private const int WH_KEYBOARD_LL = 13;

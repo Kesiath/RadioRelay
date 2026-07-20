@@ -25,8 +25,7 @@ public class AudioThreadingStressTests
             }
             catch (ObjectDisposedException)
             {
-                // Disposing is allowed to make later calls no-op/throw after the
-                // stress loop is cancelled; other concurrency exceptions are not.
+                // Ignore disposal races after cancellation, but no other failures.
             }
             catch (Exception ex)
             {

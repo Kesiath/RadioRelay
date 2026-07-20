@@ -4,7 +4,9 @@ using System.Windows.Forms;
 
 namespace RadioRelay.Client.UI
 {
-    /// <summary>Compact status pill whose tint follows its ForeColor.</summary>
+    /// <summary>
+    /// Draws a compact status pill tinted by its foreground color.
+    /// </summary>
     public sealed class StatusBadge : Label
     {
         private bool _flatRightEdge;

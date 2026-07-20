@@ -9,15 +9,9 @@ using RadioRelay.Shared.Audio;
 
 namespace RadioRelay.Client.AudioEngineNs
 {
-    /// 
-    /// Loads the app's recorded sound assets (transmit/receive key clicks,
-    /// connect/disconnect beeps, frequency-collision cue, and looping
-    /// per-band background static) from embedded WAV resources, decoding
-    /// each once into a normalized mono float array at this app's internal
-    /// 16kHz pipeline rate so they can be mixed directly alongside voice
-    /// audio through the same buffers/panning already used for everything
-    /// else.
-    /// 
+    /// <summary>
+    /// Loads embedded WAV cues and band noise as normalized 16 kHz mono samples.
+    /// </summary>
     public static class SoundLibrary
     {
         private const int TargetSampleRate = AudioEngine.SampleRate;
@@ -45,12 +39,7 @@ namespace RadioRelay.Client.AudioEngineNs
         {
             var assembly = Assembly.GetExecutingAssembly();
 
-            // Match on ".{fileName}" rather than a bare suffix match --
-            // MSBuild's default embedded-resource naming joins path
-            // segments with '.', so e.g. "hf_noise.wav" as a bare suffix
-            // would ALSO match the resource names for "vhf_noise.wav" and
-            // "uhf_noise.wav" (both literally end with that substring).
-            // Requiring the preceding '.' disambiguates them correctly.
+            // Require the separator so hf_noise.wav cannot match VHF or UHF resources.
             string suffix = "." + fileName;
             var resourceName = assembly.GetManifestResourceNames()
                 .FirstOrDefault(n => n.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));

@@ -6,7 +6,9 @@ using System.Windows.Forms;
 
 namespace RadioRelay.Client.UI
 {
-    /// <summary>Owner-drawn title bar used by the frameless main window.</summary>
+    /// <summary>
+    /// Draws the title bar for the frameless main window.
+    /// </summary>
     public sealed class ModernTitleBar : Control
     {
         private const int WM_NCLBUTTONDOWN = 0x00A1;
@@ -127,7 +129,9 @@ namespace RadioRelay.Client.UI
             Invalidate();
         }
 
-        /// <summary>Returns true when a point is over a control that must receive client input.</summary>
+        /// <summary>
+        /// Returns whether a point is over a control that accepts client input.
+        /// </summary>
         public bool IsInteractiveAt(Point clientPoint) =>
             _minimizeButton.Bounds.Contains(clientPoint) ||
             (_maximizeAvailable && _maximizeButton.Bounds.Contains(clientPoint)) ||

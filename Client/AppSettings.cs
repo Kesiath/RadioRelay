@@ -9,8 +9,9 @@ using RadioRelay.Shared.Diagnostics;
 
 namespace RadioRelay.Client
 {
-    /// A single PTT binding slot as persisted to disk. Type == null
-    /// means "this slot isn't bound to anything".
+    /// <summary>
+    /// Stores one PTT binding; a null type means unbound.
+    /// </summary>
     public class PttSlotSettings
     {
         public PttBindingType? Type { get; set; }
@@ -27,8 +28,9 @@ namespace RadioRelay.Client
         public string Passcode { get; set; } = "";
     }
 
-    /// Persisted per-radio state -- everything a user configures
-    /// for one radio row, matched back up by radio Name on load.
+    /// <summary>
+    /// Stores user configuration for one named radio.
+    /// </summary>
     public class RadioSettings
     {
         public string Name { get; set; } = "";
@@ -44,26 +46,17 @@ namespace RadioRelay.Client
         public PttSlotSettings PttPrimary { get; set; } = new();
         public PttSlotSettings PttSecondary { get; set; } = new();
 
-        // Stored as an ARGB int rather than System.Drawing.Color, since
-        // Color's public shape doesn't round-trip cleanly through
-        // System.Text.Json's default reflection-based (de)serialization.
-        public int HudColorArgb { get; set; } = -9868684; // default blue-ish, matches RadioChannel's default
+        // Store ARGB because Color does not round-trip cleanly through System.Text.Json.
+        public int HudColorArgb { get; set; } = -9868684; // Default radio blue.
 
         public int? HudX { get; set; }
         public int? HudY { get; set; }
     }
 
-    /// 
-    /// Everything the app remembers between runs: server address, callsign,
-    /// PTT release delay, audio devices/gain/click volumes, and every
-    /// radio's frequency/volume/ear/passcode/PTT bindings/HUD color+position
-    /// -- so reopening the app is "just hit Connect", not "set everything up
-    /// again from scratch". Stored as plain JSON under
-    /// %AppData%\RadioRelay\settings.json. Passcodes are saved in plaintext
-    /// here, same as any local app config file (Wi-Fi passwords, browser
-    /// saved passwords, etc.) -- this is a local convenience file, not a
-    /// secrets vault, and is only ever read by this app on this machine.
-    /// 
+    /// <summary>
+    /// Stores local application and radio configuration as JSON under
+    /// <c>%AppData%\RadioRelay\settings.json</c>. Passcodes are stored in plaintext.
+    /// </summary>
     public class AppSettings
     {
         public const string ExportFileName = "RadioRelay-settings.json";
@@ -74,14 +67,17 @@ namespace RadioRelay.Client
         public string Callsign { get; set; } = "";
         public int PttReleaseDelayMs { get; set; } = 200;
         public bool ControlLockEnabled { get; set; }
-        // The ICP binding and position are machine-local and intentionally
-        // omitted from operational profile exports.
+        // ICP controls are machine-local and omitted from profile exports.
         public PttSlotSettings IcpToggle { get; set; } = new();
         public int? IcpX { get; set; }
         public int? IcpY { get; set; }
 
         public int InputDeviceIndex { get; set; } = -1;
         public int OutputDeviceIndex { get; set; } = -1;
+        // Null disables the machine-local virtual-cable output.
+        public string? PassthroughDeviceId { get; set; }
+        // Retained to migrate index-based passthrough settings to endpoint IDs.
+        public int? PassthroughDeviceIndex { get; set; }
         public float InputGain { get; set; } = 1.0f;
         public float InputClickVolume { get; set; } = 1.0f;
         public float TalkOverWarningVolume { get; set; } = 1.0f;
@@ -107,8 +103,7 @@ namespace RadioRelay.Client
             catch (Exception ex)
             {
                 ClientDiagnostics.Current?.LogException(ErrorCodes.ClientSettingsLoadSaveFailure, "settings load failed", ex);
-                // Missing/corrupt/unreadable settings file -- fall back to
-                // defaults rather than crashing the app on startup.
+                // Use defaults when settings cannot be loaded.
             }
             return new AppSettings();
         }
@@ -125,8 +120,7 @@ namespace RadioRelay.Client
             catch (Exception ex)
             {
                 ClientDiagnostics.Current?.LogException(ErrorCodes.ClientSettingsLoadSaveFailure, "settings save failed", ex);
-                // Best-effort -- failing to persist settings shouldn't crash
-                // the app on close.
+                // Settings persistence must not prevent shutdown.
             }
         }
 
@@ -202,8 +196,7 @@ namespace RadioRelay.Client
                     .ToList();
             }
 
-            // Legacy profiles represented one radio with one frequency/key.
-            // Treat that pair as Channel 1; runtime fills 2-9 from radio defaults.
+            // Migrate single-channel profiles into preset one.
             return new List<RadioPresetSettings>
             {
                 new()

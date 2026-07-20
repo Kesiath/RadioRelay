@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -20,27 +22,25 @@ namespace RadioRelay.Server
         public DateTime LastSeen;
     }
 
-    /// 
-    /// Frequency-based UDP relay. Clients tell the server which frequencies
-    /// they're listening on (Subscribe packets); when an Audio packet arrives
-    /// on frequency F, it is forwarded to every other client currently
-    /// listening on a frequency within tolerance of F. There is no concept
-    /// of a fixed "channel" -- grouping is purely by frequency match.
-    ///
-    /// The server logs connection lifecycle, auth/admin, and malformed packet
-    /// events to the console. Per-transmission voice activity is intentionally
-    /// not logged so live conversations do not clutter the server output.
-    /// 
+    /// <summary>
+    /// Relays UDP audio by frequency and net subscription while enforcing
+    /// authentication, lifecycle, and rate limits.
+    /// </summary>
     public class RelayServer
     {
-        // 0.005 MHz = 5 kHz tolerance, similar spacing to an analog radio dial.
+        // Match frequencies within 5 kHz.
         private const float FrequencyTolerance = 0.005f;
         private const int ClientTimeoutSeconds = 20;
+        private static readonly byte[] ZeroNetIdHash = new byte[8];
 
         private readonly UdpClient _udp;
         private readonly ConcurrentDictionary<Guid, ClientState> _clients = new();
         private readonly ConcurrentDictionary<IPAddress, byte> _bannedAddresses = new();
-        private readonly ConcurrentDictionary<IPAddress, RateLimitState> _rateLimits = new();
+        private readonly ConcurrentDictionary<Guid, RateLimitState> _audioRateLimits = new();
+        private readonly ConcurrentDictionary<Guid, RateLimitState> _controlRateLimits = new();
+        private readonly ConcurrentDictionary<Guid, ClientTransmissionTracker> _transmissionTrackers = new();
+        private readonly ConcurrentDictionary<SourceEndpointKey, RateLimitState> _unregisteredEndpointRateLimits = new();
+        private readonly ConcurrentDictionary<IPAddress, RateLimitState> _unregisteredIpRateLimits = new();
         private readonly ConcurrentDictionary<string, FloodLogState> _floodLogs = new();
         private readonly string _serverPassword;
         private readonly RelayServerOptions _options;
@@ -100,11 +100,11 @@ namespace RadioRelay.Server
                     continue;
                 }
 
-                if (IsRateLimited(result.RemoteEndPoint.Address))
+                if (IsRateLimited(result.Buffer, result.RemoteEndPoint, out var rateLimitScope))
                 {
                     WriteFloodLimited(
-                        $"rate:{NormalizeAddress(result.RemoteEndPoint.Address)}",
-                        $"[Warning] Rate limited UDP datagrams from {result.RemoteEndPoint.Address}");
+                        $"rate:{rateLimitScope}",
+                        $"[Warning] Rate limited UDP datagrams from {result.RemoteEndPoint} ({rateLimitScope})");
                     Interlocked.Increment(ref _datagramsDropped);
                     continue;
                 }
@@ -152,8 +152,18 @@ namespace RadioRelay.Server
                             break;
                         }
 
-                        bool isNewClient = !_clients.ContainsKey(p.ClientId);
-                        if (isNewClient && _clients.Count >= _options.MaxClientCount)
+                        bool isNewClient = false;
+                        if (_clients.TryGetValue(p.ClientId, out var clientState) &&
+                            !clientState.EndPoint.Equals(from))
+                        {
+                            WriteFloodLimited(
+                                $"identity:{p.ClientId}",
+                                $"[Warning] Rejected subscribe from {from}: action=subscribe result=rejected reason=client-id-owned-by-active-endpoint");
+                            Interlocked.Increment(ref _datagramsDropped);
+                            break;
+                        }
+
+                        if (clientState == null && _clients.Count >= _options.MaxClientCount)
                         {
                             WriteFloodLimited(
                                 $"max-clients:{NormalizeAddress(from.Address)}",
@@ -162,24 +172,34 @@ namespace RadioRelay.Server
                             break;
                         }
 
-                        _clients.AddOrUpdate(p.ClientId,
-                            _ => new ClientState
+                        if (clientState == null)
+                        {
+                            var candidate = new ClientState
                             {
                                 EndPoint = from,
                                 Frequencies = p.Frequencies,
                                 Subscriptions = p.Subscriptions,
                                 Callsign = p.Callsign,
                                 LastSeen = DateTime.UtcNow
-                            },
-                            (_, existing) =>
+                            };
+                            if (_clients.TryAdd(p.ClientId, candidate))
                             {
-                                existing.EndPoint = from;
-                                existing.Frequencies = p.Frequencies;
-                                existing.Subscriptions = p.Subscriptions;
-                                existing.Callsign = p.Callsign;
-                                existing.LastSeen = DateTime.UtcNow;
-                                return existing;
-                            });
+                                clientState = candidate;
+                                isNewClient = true;
+                            }
+                            else if (!_clients.TryGetValue(p.ClientId, out clientState) ||
+                                     !clientState.EndPoint.Equals(from))
+                            {
+                                Interlocked.Increment(ref _datagramsDropped);
+                                break;
+                            }
+                        }
+
+                        clientState.EndPoint = from;
+                        clientState.Frequencies = p.Frequencies;
+                        clientState.Subscriptions = p.Subscriptions;
+                        clientState.Callsign = p.Callsign;
+                        clientState.LastSeen = DateTime.UtcNow;
 
                         if (isNewClient)
                         {
@@ -196,10 +216,7 @@ namespace RadioRelay.Server
                         var p = HeartbeatPacket.Decode(data);
                         if (_clients.TryGetValue(p.ClientId, out var state) && state.EndPoint.Equals(from))
                         {
-                            // Heartbeats are reachability probes, not presence
-                            // leases. Healthy clients refresh presence with
-                            // Subscribe packets; unhealthy clients intentionally
-                            // keep probing without remaining in the online list.
+                            // Heartbeats probe reachability; subscriptions maintain presence.
                             SendAck(p.ClientId, from);
                         }
                         else if (IsAuthorized(p.ServerPassword))
@@ -223,6 +240,12 @@ namespace RadioRelay.Server
                             break;
                         }
 
+                        if (!ValidateAndTrackTransmission(sender, p))
+                        {
+                            Interlocked.Increment(ref _datagramsDropped);
+                            break;
+                        }
+
                         sender.LastSeen = DateTime.UtcNow;
                         sender.EndPoint = from;
 
@@ -236,6 +259,7 @@ namespace RadioRelay.Server
                             existing.EndPoint.Equals(from) &&
                             _clients.TryRemove(p.ClientId, out var removed))
                         {
+                            RemoveClientRateLimits(p.ClientId);
                             var name = string.IsNullOrWhiteSpace(removed.Callsign) ? "(no callsign)" : removed.Callsign;
                             Console.WriteLine($"[Disconnect] {name} disconnected");
                             BroadcastPresenceUpdate();
@@ -255,6 +279,7 @@ namespace RadioRelay.Server
             {
                 if (NormalizeAddress(kvp.Value.EndPoint.Address).Equals(normalized) && _clients.TryRemove(kvp.Key, out var removed))
                 {
+                    RemoveClientRateLimits(kvp.Key);
                     removedClient = true;
                     var name = string.IsNullOrWhiteSpace(removed.Callsign) ? "(no callsign)" : removed.Callsign;
                     Console.WriteLine($"[Ban] Disconnected banned client {name} from {removed.EndPoint}");
@@ -305,6 +330,7 @@ namespace RadioRelay.Server
             if (!_clients.TryRemove(match.Key, out var removed))
                 return new RelayServerKickResult(false, selector, null, "not-found");
 
+            RemoveClientRateLimits(match.Key);
             var snapshot = CreateClientSnapshot(match.Key, removed);
             BroadcastPresenceUpdate();
             Console.WriteLine($"[Admin] Kicked {DisplayName(snapshot.Callsign)} ({snapshot.ClientId}) from {snapshot.EndPoint}: reason={reason}");
@@ -370,13 +396,115 @@ namespace RadioRelay.Server
         private static IPAddress NormalizeAddress(IPAddress address) =>
             address.IsIPv4MappedToIPv6 ? address.MapToIPv4() : address;
 
-        private bool IsRateLimited(IPAddress address)
+        private bool IsRateLimited(byte[] data, IPEndPoint source, out string scope)
         {
-            if (_options.MaxDatagramsPerIpPerSecond <= 0) return false;
+            long now = Stopwatch.GetTimestamp();
+            if (TryGetRegisteredClient(data, source, out var clientId))
+            {
+                bool isAudio = data.Length > 0 && PacketPeek.GetType(data) == PacketType.Audio;
+                var limits = isAudio ? _audioRateLimits : _controlRateLimits;
+                int rate = isAudio
+                    ? _options.MaxAudioDatagramsPerClientPerSecond
+                    : _options.MaxControlDatagramsPerClientPerSecond;
+                int burst = isAudio
+                    ? _options.AudioDatagramBurstPerClient
+                    : _options.ControlDatagramBurstPerClient;
+                var state = limits.GetOrAdd(clientId, _ => new RateLimitState());
+                if (state.TryAcquire(rate, burst, now))
+                {
+                    scope = "";
+                    return false;
+                }
+                scope = $"client:{clientId:N}:{(isAudio ? "audio" : "control")}";
+                return true;
+            }
 
-            var normalized = NormalizeAddress(address);
-            var state = _rateLimits.GetOrAdd(normalized, _ => new RateLimitState());
-            return !state.TryAcquire(_options.MaxDatagramsPerIpPerSecond, DateTime.UtcNow);
+            var normalizedAddress = NormalizeAddress(source.Address);
+            var endpointKey = new SourceEndpointKey(normalizedAddress, source.Port);
+            var endpointState = _unregisteredEndpointRateLimits.GetOrAdd(endpointKey, _ => new RateLimitState());
+            if (!endpointState.TryAcquire(
+                    _options.MaxUnregisteredDatagramsPerEndpointPerSecond,
+                    _options.UnregisteredDatagramBurstPerEndpoint,
+                    now))
+            {
+                scope = $"endpoint:{normalizedAddress}:{source.Port}:unregistered";
+                return true;
+            }
+
+            var ipState = _unregisteredIpRateLimits.GetOrAdd(normalizedAddress, _ => new RateLimitState());
+            if (ipState.TryAcquire(
+                    _options.MaxUnregisteredDatagramsPerIpPerSecond,
+                    _options.UnregisteredDatagramBurstPerIp,
+                    now))
+            {
+                scope = "";
+                return false;
+            }
+            scope = $"ip:{normalizedAddress}:unregistered";
+            return true;
+        }
+
+        private bool TryGetRegisteredClient(byte[] data, IPEndPoint source, out Guid clientId)
+        {
+            clientId = Guid.Empty;
+            if (data.Length < 17) return false;
+
+            clientId = new Guid(data.AsSpan(1, 16));
+            return _clients.TryGetValue(clientId, out var client) && client.EndPoint.Equals(source);
+        }
+
+        private void RemoveClientRateLimits(Guid clientId)
+        {
+            _audioRateLimits.TryRemove(clientId, out _);
+            _controlRateLimits.TryRemove(clientId, out _);
+            _transmissionTrackers.TryRemove(clientId, out _);
+        }
+
+        private bool ValidateAndTrackTransmission(ClientState sender, AudioPacket packet)
+        {
+            if (!float.IsFinite(packet.Frequency) || packet.Frequency < 2f || packet.Frequency > 999f)
+                return false;
+            if (packet.NetIdHash == null || packet.NetIdHash.Length != 8)
+                return false;
+            if (packet.IsEncrypted)
+            {
+                if (packet.Nonce is not { Length: 12 } || packet.Tag is not { Length: 16 })
+                    return false;
+            }
+            else if (!NetIdHashIsZero(packet.NetIdHash))
+            {
+                return false;
+            }
+
+            bool senderMayOpenRoute = SenderIsSubscribedToRoute(sender, packet);
+            if (packet.TransmissionId == 0)
+                return senderMayOpenRoute;
+
+            var tracker = _transmissionTrackers.GetOrAdd(packet.ClientId, _ => new ClientTransmissionTracker());
+            return tracker.TryAccept(packet, senderMayOpenRoute, Stopwatch.GetTimestamp());
+        }
+
+        private static bool SenderIsSubscribedToRoute(ClientState sender, AudioPacket packet)
+        {
+            if (sender.Subscriptions.Length > 0)
+            {
+                var requiredHash = packet.IsEncrypted ? packet.NetIdHash : ZeroNetIdHash;
+                foreach (var subscription in sender.Subscriptions)
+                    if (subscription.Matches(packet.Frequency, requiredHash)) return true;
+                return false;
+            }
+
+            // Accept frequency-only subscriptions on registered routes.
+            foreach (var frequency in sender.Frequencies)
+                if (Math.Abs(frequency - packet.Frequency) <= FrequencyTolerance) return true;
+            return false;
+        }
+
+        private static bool NetIdHashIsZero(byte[] hash)
+        {
+            int combined = 0;
+            for (int i = 0; i < hash.Length; i++) combined |= hash[i];
+            return combined == 0;
         }
 
         private void WriteFloodLimited(string key, string message)
@@ -400,22 +528,173 @@ namespace RadioRelay.Server
         private sealed class RateLimitState
         {
             private readonly object _sync = new();
-            private DateTime _windowStartedUtc = DateTime.MinValue;
-            private int _count;
+            private bool _initialized;
+            private long _lastRefillTimestamp;
+            private long _lastTouchedTimestamp;
+            private double _tokens;
 
-            public bool TryAcquire(int maxPerSecond, DateTime nowUtc)
+            public bool TryAcquire(int tokensPerSecond, int burstCapacity, long nowTimestamp)
+            {
+                if (tokensPerSecond <= 0 || burstCapacity <= 0) return true;
+
+                lock (_sync)
+                {
+                    if (!_initialized)
+                    {
+                        _initialized = true;
+                        _tokens = burstCapacity;
+                        _lastRefillTimestamp = nowTimestamp;
+                    }
+                    else if (nowTimestamp > _lastRefillTimestamp)
+                    {
+                        double elapsedSeconds = (nowTimestamp - _lastRefillTimestamp) / (double)Stopwatch.Frequency;
+                        _tokens = Math.Min(burstCapacity, _tokens + elapsedSeconds * tokensPerSecond);
+                        _lastRefillTimestamp = nowTimestamp;
+                    }
+
+                    _lastTouchedTimestamp = nowTimestamp;
+                    if (_tokens < 1d) return false;
+
+                    _tokens -= 1d;
+                    return true;
+                }
+            }
+
+            public bool IsIdle(long nowTimestamp, TimeSpan idlePeriod)
             {
                 lock (_sync)
                 {
-                    if (nowUtc - _windowStartedUtc >= TimeSpan.FromSeconds(1))
+                    if (!_initialized) return true;
+                    double idleSeconds = (nowTimestamp - _lastTouchedTimestamp) / (double)Stopwatch.Frequency;
+                    return idleSeconds >= idlePeriod.TotalSeconds;
+                }
+            }
+        }
+
+        private readonly record struct SourceEndpointKey(IPAddress Address, int Port);
+
+        /// <summary>
+        /// Keeps routing metadata immutable for one transmission epoch.
+        /// </summary>
+        private sealed class ClientTransmissionTracker
+        {
+            private const int MaxRetainedTransmissions = 256;
+            private static readonly TimeSpan Retention = TimeSpan.FromSeconds(30);
+            private static readonly TimeSpan LateMediaGrace = TimeSpan.FromSeconds(2);
+
+            private readonly object _sync = new();
+            private readonly Dictionary<ulong, TrackedTransmission> _transmissions = new();
+            private long _nextPruneTimestamp;
+
+            public bool TryAccept(AudioPacket packet, bool senderMayOpenRoute, long nowTimestamp)
+            {
+                lock (_sync)
+                {
+                    RemoveExpired(nowTimestamp);
+                    if (!_transmissions.TryGetValue(packet.TransmissionId, out var tracked))
                     {
-                        _windowStartedUtc = nowUtc;
-                        _count = 0;
+                        if (!senderMayOpenRoute || _transmissions.Count >= MaxRetainedTransmissions)
+                            return false;
+
+                        tracked = new TrackedTransmission(packet, nowTimestamp);
+                        _transmissions.Add(packet.TransmissionId, tracked);
+                        return true;
                     }
 
-                    if (_count >= maxPerSecond) return false;
-                    _count++;
+                    if (!tracked.RouteMatches(packet)) return false;
+                    if (tracked.EndSeen)
+                    {
+                        if (packet.IsTransmissionEnd)
+                        {
+                            if (packet.Sequence != tracked.TerminalSequence) return false;
+                            tracked.LastSeenTimestamp = nowTimestamp;
+                            return true;
+                        }
+
+                        double sinceEndSeconds = (nowTimestamp - tracked.EndSeenTimestamp) /
+                            (double)Stopwatch.Frequency;
+                        if (sinceEndSeconds > LateMediaGrace.TotalSeconds ||
+                            !SequenceIsAtOrBefore(packet.Sequence, tracked.TerminalSequence))
+                            return false;
+                    }
+
+                    tracked.LastSeenTimestamp = nowTimestamp;
+                    if (packet.IsTransmissionEnd)
+                    {
+                        tracked.EndSeen = true;
+                        tracked.EndSeenTimestamp = nowTimestamp;
+                        tracked.TerminalSequence = packet.Sequence;
+                    }
                     return true;
+                }
+            }
+
+            private void RemoveExpired(long nowTimestamp)
+            {
+                if (_transmissions.Count == 0 || nowTimestamp < _nextPruneTimestamp) return;
+                _nextPruneTimestamp = nowTimestamp + Stopwatch.Frequency * 5;
+
+                List<ulong>? expired = null;
+                foreach (var entry in _transmissions)
+                {
+                    double idleSeconds = (nowTimestamp - entry.Value.LastSeenTimestamp) /
+                        (double)Stopwatch.Frequency;
+                    if (idleSeconds >= Retention.TotalSeconds)
+                        (expired ??= new List<ulong>()).Add(entry.Key);
+                }
+                if (expired == null) return;
+                foreach (var transmissionId in expired)
+                    _transmissions.Remove(transmissionId);
+            }
+
+            private static bool SequenceIsAtOrBefore(ushort candidate, ushort terminal) =>
+                unchecked((short)(candidate - terminal)) <= 0;
+
+            private sealed class TrackedTransmission
+            {
+                private readonly int _frequencyBits;
+                private readonly bool _isEncrypted;
+                private readonly byte[] _netIdHash;
+                private readonly string _senderName;
+                private readonly string _radioName;
+                private readonly uint _audioSeed;
+
+                public long LastSeenTimestamp;
+                public bool EndSeen;
+                public long EndSeenTimestamp;
+                public ushort TerminalSequence;
+
+                public TrackedTransmission(AudioPacket packet, long nowTimestamp)
+                {
+                    _frequencyBits = BitConverter.SingleToInt32Bits(packet.Frequency);
+                    _isEncrypted = packet.IsEncrypted;
+                    _netIdHash = packet.NetIdHash.ToArray();
+                    _senderName = packet.SenderName;
+                    _radioName = packet.RadioName;
+                    _audioSeed = packet.TransmissionAudioSeed;
+                    LastSeenTimestamp = nowTimestamp;
+                    if (packet.IsTransmissionEnd)
+                    {
+                        EndSeen = true;
+                        EndSeenTimestamp = nowTimestamp;
+                        TerminalSequence = packet.Sequence;
+                    }
+                }
+
+                public bool RouteMatches(AudioPacket packet) =>
+                    _frequencyBits == BitConverter.SingleToInt32Bits(packet.Frequency) &&
+                    _isEncrypted == packet.IsEncrypted &&
+                    NetIdHashesEqual(_netIdHash, packet.NetIdHash) &&
+                    string.Equals(_senderName, packet.SenderName, StringComparison.Ordinal) &&
+                    string.Equals(_radioName, packet.RadioName, StringComparison.Ordinal) &&
+                    _audioSeed == packet.TransmissionAudioSeed;
+
+                private static bool NetIdHashesEqual(byte[] left, byte[] right)
+                {
+                    if (left.Length != right.Length) return false;
+                    int combined = 0;
+                    for (int i = 0; i < left.Length; i++) combined |= left[i] ^ right[i];
+                    return combined == 0;
                 }
             }
         }
@@ -436,11 +715,9 @@ namespace RadioRelay.Server
             }
         }
 
-        /// Confirms receipt to the client so it can actually
-        /// validate the connection is alive end-to-end, rather than just
-        /// assuming it's fine because sending never throws (UDP send
-        /// "succeeding" only means the packet left this machine, not that
-        /// anyone received it).
+        /// <summary>
+        /// Confirms bidirectional UDP reachability to the client.
+        /// </summary>
         private void SendAck(Guid clientId, IPEndPoint to)
         {
             try
@@ -450,8 +727,7 @@ namespace RadioRelay.Server
             }
             catch
             {
-                // Best-effort -- if this particular send fails, the client's
-                // own health-check timeout will surface the problem anyway.
+                // Let the client health timeout report failed acknowledgements.
             }
         }
 
@@ -501,7 +777,10 @@ namespace RadioRelay.Server
             foreach (var client in _clients.Values)
             {
                 try { SendDatagram(data, client.EndPoint); }
-                catch { /* Best-effort; clients will receive the next update. */ }
+                catch
+                {
+                    // Clients will receive the next presence update.
+                }
             }
         }
 
@@ -514,7 +793,8 @@ namespace RadioRelay.Server
                 if (id == packet.ClientId) continue;
                 if (state.EndPoint.Equals(senderEndPoint)) continue;
 
-                if (!ClientIsSubscribedToAudio(state, packet)) continue;
+                // Relay encrypted carriers to all tuned receivers for RF occupancy modeling.
+                if (!ClientIsTunedToFrequency(state, packet.Frequency)) continue;
 
                 try
                 {
@@ -528,17 +808,18 @@ namespace RadioRelay.Server
             }
         }
 
-        private static bool ClientIsSubscribedToAudio(ClientState state, AudioPacket packet)
+        private static bool ClientIsTunedToFrequency(ClientState state, float frequency)
         {
             if (state.Subscriptions.Length > 0)
             {
-                var requiredHash = packet.IsEncrypted ? packet.NetIdHash : new byte[8];
-                return state.Subscriptions.Any(subscription => subscription.Matches(packet.Frequency, requiredHash));
+                foreach (var subscription in state.Subscriptions)
+                    if (Math.Abs(subscription.Frequency - frequency) <= FrequencyTolerance) return true;
+                return false;
             }
 
-            if (packet.IsEncrypted) return false;
-
-            return state.Frequencies.Any(f => Math.Abs(f - packet.Frequency) <= FrequencyTolerance);
+            foreach (var tunedFrequency in state.Frequencies)
+                if (Math.Abs(tunedFrequency - frequency) <= FrequencyTolerance) return true;
+            return false;
         }
 
         protected virtual void SendDatagram(byte[] data, IPEndPoint to) =>
@@ -559,12 +840,27 @@ namespace RadioRelay.Server
                 {
                     if (kvp.Value.LastSeen < cutoff && _clients.TryRemove(kvp.Key, out var removed))
                     {
+                        RemoveClientRateLimits(kvp.Key);
                         var name = string.IsNullOrWhiteSpace(removed.Callsign) ? "(no callsign)" : removed.Callsign;
                         Console.WriteLine($"[Disconnect] {name} timed out");
                         BroadcastPresenceUpdate();
                     }
                 }
+
+                RemoveIdleUnregisteredRateLimits();
             }
+        }
+
+        private void RemoveIdleUnregisteredRateLimits()
+        {
+            long now = Stopwatch.GetTimestamp();
+            var idlePeriod = TimeSpan.FromMinutes(5);
+            foreach (var entry in _unregisteredEndpointRateLimits)
+                if (entry.Value.IsIdle(now, idlePeriod))
+                    _unregisteredEndpointRateLimits.TryRemove(entry.Key, out _);
+            foreach (var entry in _unregisteredIpRateLimits)
+                if (entry.Value.IsIdle(now, idlePeriod))
+                    _unregisteredIpRateLimits.TryRemove(entry.Key, out _);
         }
     }
 }
