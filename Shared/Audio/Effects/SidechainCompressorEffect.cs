@@ -2,12 +2,9 @@ using System;
 
 namespace RadioRelay.Shared.Audio.Effects
 {
-    /// DCS-SRS "$type": "sidechainCompressor" -- compresses the
-    /// main signal based on the envelope of a (usually filtered) COPY of
-    /// it, rather than the main signal's own raw envelope. This is what
-    /// gives real radios their characteristic "pumping"/ducking behavior
-    /// tied to specific frequency content (e.g. compressing based on
-    /// presence of high-frequency energy) rather than overall loudness.
+    /// <summary>
+    /// Compresses audio from the envelope of a separately processed sidechain copy.
+    /// </summary>
     public class SidechainCompressorEffect : IAudioEffect
     {
         private readonly float _attackCoeff;
@@ -34,10 +31,7 @@ namespace RadioRelay.Shared.Audio.Effects
 
         public void Process(float[] samples)
         {
-            // Build the control signal from a COPY of the input, so
-            // filtering it (e.g. a highpass to key off consonant energy)
-            // doesn't itself alter what's actually heard -- only how much
-            // the real signal gets compressed.
+            // Process a copy so sidechain filtering does not alter the audible signal.
             var sidechain = (float[])samples.Clone();
             _sidechainEffect.Process(sidechain);
 
@@ -59,6 +53,12 @@ namespace RadioRelay.Shared.Audio.Effects
 
                 samples[i] = Math.Clamp(samples[i] * gainReduction * _makeUpLinear, -1f, 1f);
             }
+        }
+
+        public void Reset()
+        {
+            _envelope = 0f;
+            _sidechainEffect.Reset();
         }
 
         private static float DbToLinear(float db) => (float)Math.Pow(10, db / 20.0);

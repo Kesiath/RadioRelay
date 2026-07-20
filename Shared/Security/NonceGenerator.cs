@@ -3,13 +3,10 @@ using System.Security.Cryptography;
 
 namespace RadioRelay.Shared.Security
 {
-    /// 
-    /// Produces 12-byte GCM nonces that are guaranteed unique for the
-    /// lifetime of this generator: a random 4-byte prefix picked once, plus
-    /// an 8-byte counter that increments every call. Reusing a nonce with
-    /// the same AES-GCM key breaks its security guarantees, so one of these
-    /// should be created per net key in use, not shared across keys.
-    /// 
+    /// <summary>
+    /// Generates unique 12-byte GCM nonces from a random process prefix and
+    /// monotonic counter. Use one generator per encryption key.
+    /// </summary>
     public class NonceGenerator
     {
         private readonly byte[] _prefix = new byte[4];

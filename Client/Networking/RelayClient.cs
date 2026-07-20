@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -11,45 +13,57 @@ using RadioRelay.Shared.Protocol;
 
 namespace RadioRelay.Client.Networking
 {
-    /// 
-    /// UDP connection to a RadioRelay server: sends mic audio and frequency
-    /// subscriptions, and raises an event for every audio packet received
-    /// from other clients. Encryption/Opus are handled by the caller
-    /// (AudioEngine) -- this class just moves AudioPacket objects over UDP.
-    ///
-    /// Also actively validates the connection is alive: UDP has no
-    /// handshake, so a successful Connect()/Send() only proves a packet left
-    /// this machine, not that the server ever received it or that this
-    /// client could receive a reply. Every Heartbeat/Subscribe expects a
-    /// HeartbeatAck back from the server; if none arrives for a while, this
-    /// class raises ConnectionHealthChanged(false) so the UI can warn the
-    /// user their transmissions may not actually be reaching anyone.
-    /// 
+    /// <summary>
+    /// Moves protocol packets over UDP and tracks bidirectional server health.
+    /// Audio encoding and encryption remain in <c>AudioEngine</c>.
+    /// </summary>
     public class RelayClient : IDisposable
     {
-        // A bit over 2x the 5s heartbeat interval, so a single lost/delayed
-        // heartbeat round-trip doesn't cause a false "unhealthy" flap.
+        // Tolerate one missed heartbeat before reporting an unhealthy connection.
         private const int HealthTimeoutSeconds = 12;
+        private const int MaxQueuedAudioDatagrams = 12;
+        private static readonly long MaxQueuedAudioAgeTicks = Stopwatch.Frequency * 60 / 1000;
+
+        private readonly record struct PendingAudioDatagram(
+            byte[] Data,
+            float Frequency,
+            long EnqueuedTimestamp);
+        private readonly record struct AudioSendFailure(Exception Exception, float Frequency);
+        private readonly record struct HealthTransition(bool Changed, bool Healthy, long Generation);
 
         private UdpClient? _udp;
         private CancellationTokenSource? _cts;
         private System.Threading.Timer? _heartbeatTimer;
         private System.Threading.Timer? _healthCheckTimer;
         private DateTime _lastAckReceived;
-        private bool _isHealthy;
+        private volatile bool _isHealthy;
         private bool _hasReportedHealthState;
+        private readonly object _healthSync = new();
+        private readonly object _healthPublishSync = new();
+        private long _healthGeneration;
+        private readonly ConcurrentQueue<PendingAudioDatagram> _audioSendQueue = new();
+        private readonly AutoResetEvent _audioSendSignal = new(false);
+        private readonly object _audioSendSync = new();
+        private Thread? _audioSendThread;
+        private volatile bool _audioSendStopping;
+        private int _queuedAudioDatagrams;
+        private bool _disposed;
         private readonly object _subscriptionSync = new();
         private PresenceSubscription[] _lastSubscriptions = Array.Empty<PresenceSubscription>();
         private readonly IClientDiagnostics? _diagnostics;
+        private readonly NetworkQualityTracker _networkQuality = new();
+        private RelayConnectionState _connectionState = RelayConnectionState.Disconnected;
 
         public Guid ClientId { get; }
         public bool IsConnected { get; private set; }
         public bool IsHealthy => _isHealthy;
         public string ServerPassword { get; set; } = "";
+        public NetworkQualitySnapshot QualitySnapshot =>
+            _networkQuality.Snapshot(DateTime.UtcNow, _connectionState);
 
-        /// User-entered callsign, sent along with Subscribe packets
-        /// so the server can log connect/disconnect and audio activity by
-        /// name instead of a raw GUID. Never used for access control.
+        /// <summary>
+        /// Callsign sent for presence and server logging, never access control.
+        /// </summary>
         public string Callsign { get; set; } = "";
 
         public event Action<AudioPacket>? AudioReceived;
@@ -58,11 +72,11 @@ namespace RadioRelay.Client.Networking
         public event Action<string[]>? ConnectedClientNamesUpdated;
         public event Action<string>? StatusChanged;
 
-        /// Fires on every healthy/unhealthy transition, including
-        /// the first HeartbeatAck that proves the UDP path to the server is
-        /// actually established, so the UI can show/hide warnings and play
-        /// connection audio based on confirmed server reachability.
+        /// <summary>
+        /// Reports confirmed UDP reachability transitions.
+        /// </summary>
         public event Action<bool>? ConnectionHealthChanged;
+        public event Action<NetworkQualitySnapshot>? NetworkQualityChanged;
 
         public RelayClient(Guid clientId, IClientDiagnostics? diagnostics = null)
         {
@@ -77,6 +91,7 @@ namespace RadioRelay.Client.Networking
 
         public void Connect(string host, int port, string serverPassword)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             ServerPassword = serverPassword ?? "";
             Disconnect();
 
@@ -88,10 +103,19 @@ namespace RadioRelay.Client.Networking
                 cts = new CancellationTokenSource();
                 _udp = udp;
                 _cts = cts;
-                IsConnected = true;
-                _isHealthy = false;
-                _hasReportedHealthState = false;
-                _lastAckReceived = DateTime.MinValue; // not established until a server ack proves the UDP path is working
+                lock (_healthPublishSync)
+                {
+                    lock (_healthSync)
+                    {
+                        IsConnected = true;
+                        _isHealthy = false;
+                        _hasReportedHealthState = false;
+                        _lastAckReceived = DateTime.MinValue; // Unhealthy until the server acknowledges.
+                        _healthGeneration++;
+                    }
+                    SetConnectionState(RelayConnectionState.Connecting);
+                }
+                EnsureAudioSendThread();
 
                 _ = Task.Run(() => ReceiveLoop(cts.Token));
                 _heartbeatTimer = new System.Threading.Timer(_ => SendHeartbeat(), null, 0, 5000);
@@ -106,9 +130,17 @@ namespace RadioRelay.Client.Networking
                 udp.Dispose();
                 _udp = null;
                 _cts = null;
-                IsConnected = false;
-                _isHealthy = false;
-                _hasReportedHealthState = false;
+                lock (_healthPublishSync)
+                {
+                    lock (_healthSync)
+                    {
+                        IsConnected = false;
+                        _isHealthy = false;
+                        _hasReportedHealthState = false;
+                        _healthGeneration++;
+                    }
+                    SetConnectionState(RelayConnectionState.Disconnected);
+                }
                 throw;
             }
         }
@@ -116,16 +148,26 @@ namespace RadioRelay.Client.Networking
         public void Disconnect()
         {
             if (!IsConnected) return;
-            IsConnected = false;
             _heartbeatTimer?.Dispose();
             _healthCheckTimer?.Dispose();
 
+            FlushPendingAudioDatagrams();
             SendPresenceDisconnect();
+            lock (_healthPublishSync)
+            {
+                lock (_healthSync)
+                {
+                    IsConnected = false;
+                    _isHealthy = false;
+                    _hasReportedHealthState = false;
+                    _healthGeneration++;
+                }
+                SetConnectionState(RelayConnectionState.Disconnected);
+            }
 
             _cts?.Cancel();
             _udp?.Close();
-            _isHealthy = false;
-            _hasReportedHealthState = false;
+            ClearPendingAudioDatagrams();
             RaiseStatusChanged("Disconnected");
         }
 
@@ -159,6 +201,7 @@ namespace RadioRelay.Client.Networking
                     Callsign = Callsign,
                     ServerPassword = ServerPassword
                 }.Encode();
+                _networkQuality.RecordHeartbeatSent(DateTime.UtcNow);
                 _udp.Send(data, data.Length);
             }
             catch (Exception ex)
@@ -200,7 +243,9 @@ namespace RadioRelay.Client.Networking
             return clone;
         }
 
-        /// ClientId is stamped on here so callers don't need to set it themselves.
+        /// <summary>
+        /// Stamps the client ID and queues audio for ordered UDP delivery.
+        /// </summary>
         public void SendAudio(AudioPacket packet)
         {
             if (_udp == null || !IsConnected) return;
@@ -208,16 +253,36 @@ namespace RadioRelay.Client.Networking
             try
             {
                 var data = packet.Encode();
-                _udp.Send(data, data.Length);
+                var pending = new PendingAudioDatagram(
+                    data,
+                    packet.Frequency,
+                    Stopwatch.GetTimestamp());
+                if (packet.IsTransmissionEnd)
+                {
+                    AudioSendFailure? failure;
+                    lock (_audioSendSync)
+                    {
+                        failure = DrainPendingAudioDatagramsLocked();
+                        if (failure == null)
+                            failure = TrySendAudioDatagramLocked(pending);
+                    }
+                    if (failure != null) ReportAudioSendFailure(failure.Value);
+                    return;
+                }
+
+                _audioSendQueue.Enqueue(pending);
+                Interlocked.Increment(ref _queuedAudioDatagrams);
+                while (Volatile.Read(ref _queuedAudioDatagrams) > MaxQueuedAudioDatagrams &&
+                       _audioSendQueue.TryDequeue(out _))
+                {
+                    Interlocked.Decrement(ref _queuedAudioDatagrams);
+                }
+                _audioSendSignal.Set();
             }
             catch (Exception ex)
             {
-                // A send failing outright (e.g. "network unreachable") is a
-                // strong, immediate signal transmissions aren't going
-                // through -- don't wait for the next health-check tick.
-                RaiseStatusChanged($"Failed to send audio: {ex.Message}");
-                _diagnostics?.LogException(ErrorCodes.ClientSendAudioFailure, $"send audio frequency={packet.Frequency:0.000}", ex);
-                SetHealthy(false);
+                // Report an explicit send failure without waiting for the health timer.
+                ReportAudioSendFailure(new AudioSendFailure(ex, packet.Frequency));
             }
         }
 
@@ -225,12 +290,7 @@ namespace RadioRelay.Client.Networking
         {
             if (_udp == null || !IsConnected) return;
 
-            // A Subscribe packet is a stronger heartbeat: it refreshes LastSeen,
-            // carries the server password, receives the same HeartbeatAck, and
-            // recreates this client in the server's user table after a server
-            // restart. Without this, a restarted server can ACK heartbeats for
-            // an unknown client while still dropping that client's audio because
-            // no ClientState exists for its ClientId.
+            // Resubscribe to restore server state after a restart.
             var subscriptions = GetLastSubscriptionsSnapshot();
             if (_isHealthy && subscriptions.Length > 0)
             {
@@ -241,32 +301,163 @@ namespace RadioRelay.Client.Networking
             try
             {
                 var data = new HeartbeatPacket { ClientId = ClientId, ServerPassword = ServerPassword }.Encode();
+                _networkQuality.RecordHeartbeatSent(DateTime.UtcNow);
                 _udp.Send(data, data.Length);
             }
-            catch { /* socket may be closing; the health check will catch a real problem */ }
+            catch
+            {
+                // Let the health check report persistent socket failures.
+            }
         }
 
         private void CheckHealth()
         {
             if (!IsConnected) return;
-            bool healthy = (DateTime.UtcNow - _lastAckReceived).TotalSeconds <= HealthTimeoutSeconds;
-            SetHealthy(healthy);
+            lock (_healthPublishSync)
+            {
+                HealthTransition transition;
+                lock (_healthSync)
+                {
+                    if (!IsConnected) return;
+                    bool healthy = (DateTime.UtcNow - _lastAckReceived).TotalSeconds <= HealthTimeoutSeconds;
+                    transition = UpdateHealthyLocked(healthy);
+                }
+                PublishHealthTransitionLocked(transition);
+            }
+        }
+
+        private void EnsureAudioSendThread()
+        {
+            if (_audioSendThread != null) return;
+            _audioSendStopping = false;
+            _audioSendThread = new Thread(ProcessAudioSendQueue)
+            {
+                IsBackground = true,
+                Name = "RadioRelay UDP audio sender",
+                Priority = ThreadPriority.AboveNormal
+            };
+            _audioSendThread.Start();
+        }
+
+        private void ProcessAudioSendQueue()
+        {
+            while (!_audioSendStopping)
+            {
+                _audioSendSignal.WaitOne();
+                if (_audioSendStopping) break;
+                AudioSendFailure? failure;
+                lock (_audioSendSync)
+                    failure = DrainPendingAudioDatagramsLocked();
+                if (failure != null) ReportAudioSendFailure(failure.Value);
+            }
+        }
+
+        private void FlushPendingAudioDatagrams()
+        {
+            AudioSendFailure? failure;
+            lock (_audioSendSync)
+                failure = DrainPendingAudioDatagramsLocked();
+            if (failure != null) ReportAudioSendFailure(failure.Value);
+        }
+
+        private AudioSendFailure? DrainPendingAudioDatagramsLocked()
+        {
+            while (_audioSendQueue.TryDequeue(out var pending))
+            {
+                Interlocked.Decrement(ref _queuedAudioDatagrams);
+                if (Stopwatch.GetTimestamp() - pending.EnqueuedTimestamp > MaxQueuedAudioAgeTicks)
+                    continue;
+
+                var failure = TrySendAudioDatagramLocked(pending);
+                if (failure != null)
+                {
+                    ClearPendingAudioDatagrams();
+                    return failure;
+                }
+            }
+            return null;
+        }
+
+        private AudioSendFailure? TrySendAudioDatagramLocked(PendingAudioDatagram pending)
+        {
+            var udp = _udp;
+            if (udp == null || !IsConnected) return null;
+            try
+            {
+                udp.Send(pending.Data, pending.Data.Length);
+                return null;
+            }
+            catch (Exception ex)
+            {
+                ClearPendingAudioDatagrams();
+                return new AudioSendFailure(ex, pending.Frequency);
+            }
+        }
+
+        private void ReportAudioSendFailure(AudioSendFailure failure)
+        {
+            RaiseStatusChanged($"Failed to send audio: {failure.Exception.Message}");
+            _diagnostics?.LogException(
+                ErrorCodes.ClientSendAudioFailure,
+                $"send audio frequency={failure.Frequency:0.000}",
+                failure.Exception);
+            SetHealthy(false);
+        }
+
+        private void ClearPendingAudioDatagrams()
+        {
+            while (_audioSendQueue.TryDequeue(out _))
+                Interlocked.Decrement(ref _queuedAudioDatagrams);
+            Interlocked.Exchange(ref _queuedAudioDatagrams, 0);
         }
 
         private void SetHealthy(bool healthy)
         {
-            if (_hasReportedHealthState && healthy == _isHealthy) return;
-            bool wasHealthy = _isHealthy;
+            lock (_healthPublishSync)
+            {
+                HealthTransition transition;
+                lock (_healthSync)
+                {
+                    if (!IsConnected) return;
+                    transition = UpdateHealthyLocked(healthy);
+                }
+                PublishHealthTransitionLocked(transition);
+            }
+        }
+
+        private HealthTransition UpdateHealthyLocked(bool healthy)
+        {
+            if (_hasReportedHealthState && healthy == _isHealthy)
+                return new HealthTransition(false, healthy, _healthGeneration);
             _isHealthy = healthy;
             _hasReportedHealthState = true;
+            return new HealthTransition(true, healthy, ++_healthGeneration);
+        }
 
-            // If the outbound path still works but replies are blocked, stop
-            // advertising this client as present. Keep the socket open and use
-            // heartbeat probes so a later ACK can restore the subscription.
-            if (wasHealthy && !healthy)
-                SendPresenceDisconnect();
+        private void PublishHealthTransitionLocked(HealthTransition transition)
+        {
+            if (!transition.Changed) return;
 
+            // Serialize publication and reject transitions invalidated by reconnection.
+            lock (_healthSync)
+            {
+                if (transition.Generation != _healthGeneration ||
+                    !_hasReportedHealthState ||
+                    transition.Healthy != _isHealthy)
+                {
+                    return;
+                }
+            }
+
+            bool healthy = transition.Healthy;
+            SetConnectionState(healthy ? RelayConnectionState.Connected : RelayConnectionState.Unhealthy);
+
+            // Allow terminal PTT controls before deregistering the endpoint.
             SafeInvoke(ConnectionHealthChanged, healthy);
+
+            // Withdraw presence but retain probes so a later acknowledgement can recover.
+            if (!healthy)
+                SendPresenceDisconnect();
         }
 
         private void SendPresenceDisconnect()
@@ -276,7 +467,10 @@ namespace RadioRelay.Client.Networking
                 var data = new HeartbeatPacket { ClientId = ClientId, ServerPassword = ServerPassword }.Encode(PacketType.Disconnect);
                 _udp?.Send(data, data.Length);
             }
-            catch { /* best-effort -- the server will time us out anyway */ }
+            catch
+            {
+                // Let the server expire the client if disconnect delivery fails.
+            }
         }
 
         private async Task ReceiveLoop(CancellationToken ct)
@@ -296,6 +490,8 @@ namespace RadioRelay.Client.Networking
 
                 try
                 {
+                    var receivedUtc = DateTime.UtcNow;
+                    _networkQuality.RecordPacket(receivedUtc);
                     HandleIncomingPacket(result.Buffer);
                 }
                 catch (Exception ex) when (IsMalformedPacketException(ex))
@@ -315,8 +511,19 @@ namespace RadioRelay.Client.Networking
                 var ack = HeartbeatPacket.Decode(data);
                 if (ack.ClientId != ClientId) return;
 
-                _lastAckReceived = DateTime.UtcNow;
-                SetHealthy(true);
+                DateTime receivedUtc = DateTime.UtcNow;
+                lock (_healthPublishSync)
+                {
+                    HealthTransition transition;
+                    lock (_healthSync)
+                    {
+                        if (!IsConnected) return;
+                        _lastAckReceived = receivedUtc;
+                        transition = UpdateHealthyLocked(true);
+                    }
+                    _networkQuality.RecordAck(receivedUtc);
+                    PublishHealthTransitionLocked(transition);
+                }
                 return;
             }
 
@@ -332,8 +539,19 @@ namespace RadioRelay.Client.Networking
             if (type != PacketType.Audio) return;
 
             var packet = AudioPacket.Decode(data);
-            if (packet.ClientId == ClientId) return; // server already excludes sender, extra safety
+            if (packet.ClientId == ClientId) return; // Ignore reflected local packets.
+            _networkQuality.RecordInboundAudio(
+                packet.ClientId,
+                packet.TransmissionId,
+                packet.Sequence,
+                DateTime.UtcNow);
             SafeInvoke(AudioReceived, packet);
+        }
+
+        private void SetConnectionState(RelayConnectionState state)
+        {
+            _connectionState = state;
+            SafeInvoke(NetworkQualityChanged, QualitySnapshot);
         }
 
         private static bool IsMalformedPacketException(Exception ex) =>
@@ -348,10 +566,25 @@ namespace RadioRelay.Client.Networking
             foreach (Action<T> handler in handlers.GetInvocationList().Cast<Action<T>>())
             {
                 try { handler(arg); }
-                catch { /* UI/background subscriber failures must not stop network loops or timers. */ }
+                catch
+                {
+                    // Isolate network loops and timers from subscriber failures.
+                }
             }
         }
 
-        public void Dispose() => Disconnect();
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            Disconnect();
+            _audioSendStopping = true;
+            _audioSendSignal.Set();
+            var thread = _audioSendThread;
+            _audioSendThread = null;
+            if (thread != null && thread != Thread.CurrentThread)
+                thread.Join(TimeSpan.FromSeconds(1));
+            _audioSendSignal.Dispose();
+        }
     }
 }

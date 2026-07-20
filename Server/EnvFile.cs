@@ -4,9 +4,9 @@ using System.IO;
 
 namespace RadioRelay.Server
 {
-    /// Minimal .env parser: KEY=VALUE lines, '#' comment lines, optional
-    /// surrounding quotes and an optional leading "export". Values are looked
-    /// up case-insensitively. Missing/unreadable files yield an empty set.
+    /// <summary>
+    /// Parses case-insensitive <c>.env</c> key-value files with quotes and export prefixes.
+    /// </summary>
     public sealed class EnvFile
     {
         public static readonly EnvFile Empty = new EnvFile(new Dictionary<string, string>());

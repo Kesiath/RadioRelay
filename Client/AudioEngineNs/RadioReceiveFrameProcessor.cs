@@ -4,17 +4,24 @@ using RadioRelay.Shared.Audio;
 
 namespace RadioRelay.Client.AudioEngineNs
 {
-    /// Shared post-Opus receive path used by both remote playback and the
-    /// local recording passthrough. Keeping this in one implementation is
-    /// what makes passthrough audio receive-equivalent rather than an
-    /// approximation of it.
+    /// <summary>
+    /// Applies shared post-Opus processing for remote playback and local passthrough.
+    /// </summary>
     internal static class RadioReceiveFrameProcessor
     {
         public static float[] Process(
             short[]? decodedPcm,
             RadioChannel channel,
             RadioEffectProfile profile,
-            ref int noiseLoopPosition)
+            RadioNoiseGenerator noiseGenerator) =>
+            Process(decodedPcm, channel.Frequency, channel.IsIntercom, profile, noiseGenerator);
+
+        public static float[] Process(
+            short[]? decodedPcm,
+            float frequency,
+            bool isIntercom,
+            RadioEffectProfile profile,
+            RadioNoiseGenerator noiseGenerator)
         {
             var frame = new float[OpusCodec.FrameSize];
             if (decodedPcm != null)
@@ -22,22 +29,43 @@ namespace RadioRelay.Client.AudioEngineNs
                 int count = Math.Min(frame.Length, decodedPcm.Length);
                 for (int i = 0; i < count; i++)
                     frame[i] = decodedPcm[i] / 32768f;
-                profile.RxEffect.Process(frame);
             }
 
-            if (channel.IsIntercom) return frame;
+            return ApplyReceiveChain(frame, frequency, isIntercom, profile, noiseGenerator);
+        }
 
-            var noise = SoundLibrary.GetBandNoiseLoop(RadioBandExtensions.FromFrequencyMHz(channel.Frequency));
-            if (noise.Length == 0) return frame;
+        public static float[] ProcessSamples(
+            float[] samples,
+            RadioChannel channel,
+            RadioEffectProfile profile,
+            RadioNoiseGenerator noiseGenerator) =>
+            ProcessSamples(samples, channel.Frequency, channel.IsIntercom, profile, noiseGenerator);
 
-            int position = noiseLoopPosition;
-            for (int i = 0; i < frame.Length; i++)
-            {
-                frame[i] = Math.Clamp(frame[i] + noise[position] * profile.NoiseGainLinear, -1f, 1f);
-                position++;
-                if (position >= noise.Length) position = 0;
-            }
-            noiseLoopPosition = position;
+        public static float[] ProcessSamples(
+            float[] samples,
+            float frequency,
+            bool isIntercom,
+            RadioEffectProfile profile,
+            RadioNoiseGenerator noiseGenerator)
+        {
+            var frame = new float[samples.Length];
+            Array.Copy(samples, frame, samples.Length);
+            return ApplyReceiveChain(frame, frequency, isIntercom, profile, noiseGenerator);
+        }
+
+        private static float[] ApplyReceiveChain(
+            float[] frame,
+            float frequency,
+            bool isIntercom,
+            RadioEffectProfile profile,
+            RadioNoiseGenerator noiseGenerator)
+        {
+
+            // Process receiver noise through the same chain as voice.
+            if (!isIntercom)
+                noiseGenerator.AddTo(frame, profile, frequency);
+
+            profile.RxEffect.Process(frame);
             return frame;
         }
     }

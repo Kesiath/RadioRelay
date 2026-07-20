@@ -57,9 +57,7 @@ namespace RadioRelay.Client
 
             public DarkInputHost()
             {
-                // This host is the only control responsible for the field
-                // background and border. The native editor/selector inside it
-                // is deliberately borderless and inset from every edge.
+                // Let the host own the field background and border.
                 SetStyle(
                     ControlStyles.AllPaintingInWmPaint |
                     ControlStyles.OptimizedDoubleBuffer |
@@ -85,10 +83,7 @@ namespace RadioRelay.Client
                 e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
                 e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
 
-                // Keep the complete shape inside the host. The field is not
-                // given a Region and does not rely on parent transparency.
-                // This makes the result independent of native TextBox,
-                // native editor, ComboBox, and TableLayoutPanel clipping.
+                // Keep the shape inside the host to avoid native child clipping.
                 var bounds = Rectangle.Inflate(ClientRectangle, -1, -1);
                 if (bounds.Width <= 0 || bounds.Height <= 0)
                     return;
@@ -115,8 +110,11 @@ namespace RadioRelay.Client
 
         private AudioEngine? _audioEngine;
         private RelayClient? _relayClient;
+        private readonly object _relayClientCallbackLock = new();
         private readonly PttInputManager _pttInput = new();
         private readonly Dictionary<RadioChannel, System.Threading.Timer> _pttReleaseTimers = new();
+        private readonly Dictionary<RadioChannel, long> _pttReleaseGenerations = new();
+        private readonly object _pttReleaseTimerLock = new();
         private int _pttReleaseDelayMs = 200;
 
         private readonly TransmissionOverlayForm _overlay;
@@ -174,9 +172,7 @@ namespace RadioRelay.Client
 
         private readonly List<RadioRow> _radioRows = new();
 
-        // Local aliases keep the layout construction readable while the
-        // shared policy remains the single source of truth for testable size
-        // budgets and the responsive main-window geometry.
+        // Use local aliases for shared layout policy values.
         private const int PreferredWindowWidth = MainFormLayoutPolicy.FixedWindowWidth;
         private const int PreferredWindowHeight = MainFormLayoutPolicy.FixedWindowHeight;
         private const int PreferredContentWidth = MainFormLayoutPolicy.MaxContentWidth;
@@ -247,10 +243,7 @@ namespace RadioRelay.Client
 
         private void ApplySavedRadioSettings(RadioChannel ch)
         {
-            // Fall back to a legacy "INTERCOM" saved entry for the
-            // renamed third radio, so upgrading doesn't silently wipe
-            // out someone's already-configured frequency/PTT
-            // bindings/HUD position for it.
+            // Migrate the renamed third radio from its prior INTERCOM entry.
             var saved = _settings.Radios.Find(r => r.Name == ch.Name)
                 ?? (ch.Name == "RADIO 3" ? _settings.Radios.Find(r => r.Name == "INTERCOM") : null);
             if (saved == null) return;
@@ -266,7 +259,7 @@ namespace RadioRelay.Client
                 }),
                 legacyFrequency: saved.Frequency,
                 legacyPasscode: saved.Passcode);
-            ch.Volume = Math.Clamp(saved.Volume, 0f, 1f);
+            ch.Volume = Math.Clamp(saved.Volume, 0f, RadioChannel.MaxReceiveVolume);
             ch.Ear = saved.Ear;
             ch.HudColor = Color.FromArgb(saved.HudColorArgb);
             if (saved.HudX.HasValue && saved.HudY.HasValue)
@@ -278,7 +271,7 @@ namespace RadioRelay.Client
             foreach (var ch in _channels) ApplySavedRadioSettings(ch);
         }
 
-        // ---------- Small theming helpers ----------
+        // Theming helpers.
 
         private void AddPageRow(Control control, int bottomMargin = 10)
         {
@@ -457,16 +450,12 @@ namespace RadioRelay.Client
             StyleField(c);
             c.Margin = Padding.Empty;
             c.Dock = DockStyle.None;
-            // The host performs the one and only bounds calculation. Leaving
-            // left/right anchoring enabled lets WinForms resize the native
-            // child a second time and can push its right edge beyond the host.
+            // Let only the host calculate child bounds.
             c.Anchor = AnchorStyles.None;
 
             if (c is TextBox textBox)
             {
-                // Draw text inside a custom dark host instead of relying on
-                // the native white WinForms border, which was clipping on the
-                // right edge at this compact size.
+                // Draw text in the custom host to avoid native border clipping.
                 textBox.BorderStyle = BorderStyle.None;
                 textBox.Multiline = false;
             }
@@ -518,9 +507,7 @@ namespace RadioRelay.Client
                 Math.Max(1, host.ClientSize.Width - host.Padding.Horizontal),
                 Math.Max(1, host.ClientSize.Height - host.Padding.Vertical));
 
-            // Single-line native editors do not honor arbitrary heights. Keep
-            // their preferred height and center them, while custom selectors
-            // can use the complete inset content rectangle.
+            // Center fixed-height native editors within the content rectangle.
             if (control is TextBox or ComboBox)
             {
                 int preferredHeight = Math.Min(content.Height, Math.Max(1, control.PreferredSize.Height));
@@ -698,12 +685,7 @@ namespace RadioRelay.Client
                 Padding = Padding.Empty
             };
 
-            // This explicit 100% column is the important part. When no
-            // ColumnStyle is supplied, TableLayoutPanel treats the column as
-            // AutoSize. A child Panel's default preferred width is 200px, so
-            // the field became wider than its fixed parent and its right edge
-            // was simply clipped. That is why TextBox, DarkComboBox, and HUD
-            // swatch controls all appeared to lose the same right border.
+            // Use an explicit flexible column to prevent field-border clipping.
             panel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f));
             panel.RowStyles.Add(new RowStyle(SizeType.Absolute, FieldCaptionHeight));
             panel.RowStyles.Add(new RowStyle(SizeType.Percent, 100f));
@@ -1050,8 +1032,7 @@ namespace RadioRelay.Client
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 104));
-            // Intentional right spacer keeps the output selector clear of
-            // the activity rail at the far-right edge of the card.
+            // Separate the output selector from the activity rail.
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 12));
 
             row.Controls.Add(CreateCompactField("Frequency (MHz)", freq, 108), 0, 0);
@@ -1078,13 +1059,7 @@ namespace RadioRelay.Client
 
         private static TableLayoutPanel CreateRow(params Control[] controls) => CreateRow(true, controls);
 
-        // Builds a single-line row that can never wrap: extra controls that
-        // wouldn't fit inside a wrapping FlowLayoutPanel used to get pushed
-        // onto an invisible second line and clipped by the row's fixed
-        // height (that's what was hiding the HUD swatch, output device,
-        // talkover slider, and export/import buttons). A TableLayoutPanel
-        // with one auto-sized column per control plus a trailing percent
-        // filler column keeps every control on the one visible row.
+        // Keep every control on one row with a trailing flexible column.
         private static TableLayoutPanel CreateRow(bool autoStyleMargins, params Control[] controls)
         {
             var row = new TableLayoutPanel
@@ -1133,9 +1108,7 @@ namespace RadioRelay.Client
             Label pttSecondaryLabel,
             Button pttSecondaryButton)
         {
-            // The PTT A / PTT B captions are the clickable capture buttons
-            // now, which removes the separate Set buttons and keeps each
-            // binding row compact without changing the event wiring.
+            // Use the PTT captions as compact binding-capture buttons.
             const int pttRowHeight = 46;
             var row = new TableLayoutPanel
             {
@@ -1199,12 +1172,10 @@ namespace RadioRelay.Client
             return panel;
         }
 
-        // ---------- UI construction ----------
+        // UI construction.
 
         /// <summary>
-        /// Reapplies the page width after WinForms creates or resizes the native
-        /// handles. Keeping this explicit protects the AutoSize table from the
-        /// blank-page regression that affected earlier responsive builds.
+        /// Reapplies page width after WinForms creates or resizes native handles.
         /// </summary>
         private void FinalizeFixedWidthLayout()
         {
@@ -1289,7 +1260,7 @@ namespace RadioRelay.Client
             foreach (var (id, name) in AudioDeviceEnumerator.GetOutputEndpoints())
                 _passthroughDeviceBox.Items.Add(new EndpointItem(id, name));
 
-            // ---- Connection, identity, devices, and audio levels ----
+            // Connection, identity, devices, and audio levels.
             var topCard = new ModernCard
             {
                 Width = _page.Width,
@@ -1318,7 +1289,7 @@ namespace RadioRelay.Client
             topCard.Controls.Add(CreateTopSliderPairRow(_outputClickVolSlider, _talkOverVolSlider, "RX click", "Talkover"), 0, 4);
             AddPageRow(topCard, 10);
 
-            // ---- Global controls ----
+            // Global controls.
             var toolbar = new ModernCard
             {
                 Width = _page.Width,
@@ -1378,8 +1349,11 @@ namespace RadioRelay.Client
                 var vol = new ModernSlider
                 {
                     Minimum = 0,
-                    Maximum = 100,
-                    Value = Math.Clamp((int)Math.Round(ch.Volume * 100), 0, 100)
+                    Maximum = (int)(RadioChannel.MaxReceiveVolume * 100),
+                    Value = Math.Clamp(
+                        (int)Math.Round(ch.Volume * 100),
+                        0,
+                        (int)(RadioChannel.MaxReceiveVolume * 100))
                 };
                 var volValue = CreateLabel($"{vol.Value}%", muted: true);
                 volValue.Font = Theme.SmallMonoFont;
@@ -1454,7 +1428,7 @@ namespace RadioRelay.Client
                 AddPageRow(card, 10);
             }
 
-            // ---- Activity log ----
+            // Activity log.
             var logCard = new ModernCard
             {
                 Width = _page.Width,
@@ -1595,6 +1569,7 @@ namespace RadioRelay.Client
                     if (localRow.ApplyingPreset) return;
                     localRow.Channel.SetActiveFrequency((float)localRow.Freq.Value);
                     ResubscribeIfConnected();
+                    _audioEngine?.OnChannelTuningChanged(localRow.Channel);
                 };
                 localRow.ChannelBox.SelectedIndexChanged += (_, _) =>
                 {
@@ -1603,6 +1578,7 @@ namespace RadioRelay.Client
                 };
                 localRow.Vol.ValueChanged += (_, _) =>
                 {
+                    bool wasEnabled = localRow.Channel.Volume > 0f;
                     localRow.Channel.Volume = localRow.Vol.Value / 100f;
                     localRow.VolumeValueLabel.Text = $"{localRow.Vol.Value}%";
                     if (localRow.Channel.Volume <= 0f)
@@ -1612,6 +1588,8 @@ namespace RadioRelay.Client
                         _overlay.SuppressChannel(localRow.Channel);
                     }
                     _audioEngine?.UpdateChannelVolume(localRow.Channel);
+                    if (wasEnabled != (localRow.Channel.Volume > 0f))
+                        ResubscribeIfConnected();
                     UpdateRadioActivity(localRow.Channel);
                 };
                 localRow.Ear.SelectedIndexChanged += (_, _) =>
@@ -1628,6 +1606,7 @@ namespace RadioRelay.Client
                     localRow.Channel.SetActivePasscode(localRow.Passcode.Text);
                     UpdateEncryptState(localRow);
                     ResubscribeIfConnected();
+                    _audioEngine?.OnChannelTuningChanged(localRow.Channel);
                 };
 
                 localRow.PttPrimaryButton.Click += (_, _) =>
@@ -1730,14 +1709,12 @@ namespace RadioRelay.Client
             _pttInput.IcpTogglePressed += () => PostToUi(_icpOverlay.ToggleOverlay);
             _pttInput.EscapePressed += () => PostToUi(HandleGlobalEscape);
 
-            _audioEngine = new AudioEngine(_channels) { Callsign = _callsignBox.Text };
+            _audioEngine = new AudioEngine(_channels, clientId: _identity) { Callsign = _callsignBox.Text };
             _audioEngine.AudioCaptured += (_, e) => _relayClient?.SendAudio(e.Packet);
             _audioEngine.TransmissionStarted += (_, e) => OnTransmissionStarted(e);
             _audioEngine.TransmissionEnded += (_, e) => OnTransmissionEnded(e);
 
-            // Force the overlay's native window into existence now (rather
-            // than lazily on first show) so BeginInvoke from background
-            // threads works correctly from the very first transmission.
+            // Create overlay handles before background callbacks begin.
             _ = _overlay.Handle;
             _ = _icpOverlay.Handle;
         }
@@ -2070,9 +2047,7 @@ namespace RadioRelay.Client
             try
             {
                 var imported = AppSettings.ImportFromFile(dialog.FileName);
-                // Capture current machine-local identity, devices, audio controls,
-                // bindings, HUD preferences, and radio names before merging the
-                // operational profile. Imports must never replace those values.
+                // Preserve machine-local settings while importing operational values.
                 SaveCurrentSettings();
                 _settings.CopyFrom(imported);
                 ApplyImportedSettingsToUi();
@@ -2092,6 +2067,8 @@ namespace RadioRelay.Client
             ApplySavedRadioSettingsToExistingChannels();
             ApplyChannelSettingsToRows();
             ResubscribeIfConnected();
+            foreach (var channel in _channels)
+                _audioEngine?.OnChannelTuningChanged(channel);
         }
 
         private void ApplyImportedConnectionSettingsToUi()
@@ -2143,11 +2120,7 @@ namespace RadioRelay.Client
             if (!RadioReceiveMute.CanStartTransmission(channel.Volume)) return;
             SetMicTestActive(false);
 
-            if (_pttReleaseTimers.TryGetValue(channel, out var existing))
-            {
-                existing.Dispose();
-                _pttReleaseTimers.Remove(channel);
-            }
+            CancelPttReleaseTimer(channel);
             _audioEngine?.SetTransmitting(channel, true);
         }
 
@@ -2175,9 +2148,26 @@ namespace RadioRelay.Client
 
         private void CancelPttReleaseTimer(RadioChannel channel)
         {
-            if (!_pttReleaseTimers.TryGetValue(channel, out var timer)) return;
-            timer.Dispose();
-            _pttReleaseTimers.Remove(channel);
+            lock (_pttReleaseTimerLock)
+            {
+                _pttReleaseGenerations.TryGetValue(channel, out var generation);
+                _pttReleaseGenerations[channel] = generation + 1;
+                if (!_pttReleaseTimers.Remove(channel, out var timer)) return;
+                timer.Dispose();
+            }
+        }
+
+        private void CompleteDelayedPttRelease(RadioChannel channel, long generation)
+        {
+            lock (_pttReleaseTimerLock)
+            {
+                if (!_pttReleaseGenerations.TryGetValue(channel, out var current) || current != generation)
+                    return;
+                if (_pttReleaseTimers.Remove(channel, out var timer))
+                    timer.Dispose();
+            }
+
+            _audioEngine?.SetTransmitting(channel, false);
         }
 
         private void OnPttUp(RadioChannel channel)
@@ -2194,14 +2184,20 @@ namespace RadioRelay.Client
                 _audioEngine?.SetTransmitting(channel, false);
                 return;
             }
-            // Lets the mic keep capturing for a short "tail" after physical
-            // release so a quick re-press doesn't clip the end of a word,
-            // and a real release still ends the transmission after the delay.
-            if (_pttReleaseTimers.TryGetValue(channel, out var existing))
-                existing.Dispose();
-
-            _pttReleaseTimers[channel] = new System.Threading.Timer(
-                _ => RunBackgroundCallback(() => _audioEngine?.SetTransmitting(channel, false)), null, _pttReleaseDelayMs, Timeout.Infinite);
+            // Capture a short release tail to preserve final speech.
+            lock (_pttReleaseTimerLock)
+            {
+                if (_pttReleaseTimers.Remove(channel, out var existing))
+                    existing.Dispose();
+                _pttReleaseGenerations.TryGetValue(channel, out var previousGeneration);
+                long generation = previousGeneration + 1;
+                _pttReleaseGenerations[channel] = generation;
+                _pttReleaseTimers[channel] = new System.Threading.Timer(
+                    _ => RunBackgroundCallback(() => CompleteDelayedPttRelease(channel, generation)),
+                    null,
+                    _pttReleaseDelayMs,
+                    Timeout.Infinite);
+            }
         }
 
         private void StartPttCapture(RadioChannel channel, PttSlot slot, Button button, Label label)
@@ -2307,6 +2303,7 @@ namespace RadioRelay.Client
             _overlay.SetUserCount(row.Channel, 0);
             _overlay.Invalidate();
             ResubscribeIfConnected();
+            _audioEngine?.OnChannelTuningChanged(row.Channel);
             SaveCurrentSettings();
         }
 
@@ -2334,11 +2331,14 @@ namespace RadioRelay.Client
         }
 
         private PresenceSubscription[] BuildPresenceSubscriptions() =>
-            _channels.ConvertAll(c => new PresenceSubscription
-            {
-                Frequency = c.Frequency,
-                NetIdHash = c.SelectedNet.NetIdHash
-            }).ToArray();
+            _channels
+                .Where(c => c.Volume > 0f)
+                .Select(c => new PresenceSubscription
+                {
+                    Frequency = c.Frequency,
+                    NetIdHash = c.SelectedNet.NetIdHash
+                })
+                .ToArray();
 
         private void ResubscribeIfConnected()
         {
@@ -2359,21 +2359,28 @@ namespace RadioRelay.Client
 
         private void ToggleConnection()
         {
-            if (_relayClient == null || !_relayClient.IsConnected)
+            RelayClient? currentClient;
+            lock (_relayClientCallbackLock)
+                currentClient = _relayClient;
+
+            if (currentClient == null || !currentClient.IsConnected)
             {
                 _connectionEstablished = false;
-                _relayClient = new RelayClient(_identity) { Callsign = _callsignBox.Text };
-                _relayClient.StatusChanged += LogSafe;
-                _relayClient.AudioReceived += packet => _audioEngine?.OnAudioReceived(packet);
-                _relayClient.PresenceUpdated += OnPresenceUpdated;
-                _relayClient.TotalUserCountUpdated += OnTotalUserCountUpdated;
-                _relayClient.ConnectedClientNamesUpdated += OnConnectedClientNamesUpdated;
-                _relayClient.ConnectionHealthChanged += OnConnectionHealthChanged;
+                var relayClient = new RelayClient(_identity) { Callsign = _callsignBox.Text };
+                lock (_relayClientCallbackLock)
+                    _relayClient = relayClient;
+                relayClient.StatusChanged += message => OnRelayStatusChanged(relayClient, message);
+                relayClient.AudioReceived += packet => OnRelayAudioReceived(relayClient, packet);
+                relayClient.PresenceUpdated += counts => OnPresenceUpdated(relayClient, counts);
+                relayClient.TotalUserCountUpdated += count => OnTotalUserCountUpdated(relayClient, count);
+                relayClient.ConnectedClientNamesUpdated += names => OnConnectedClientNamesUpdated(relayClient, names);
+                relayClient.ConnectionHealthChanged += healthy =>
+                    OnConnectionHealthChanged(relayClient, healthy);
 
                 try
                 {
-                    _relayClient.Connect(_serverBox.Text, (int)_portBox.Value, _serverPasswordBox.Text);
-                    _relayClient.SendSubscribe(BuildPresenceSubscriptions());
+                    relayClient.Connect(_serverBox.Text, (int)_portBox.Value, _serverPasswordBox.Text);
+                    relayClient.SendSubscribe(BuildPresenceSubscriptions());
 
                     _statusLabel.Text = "Connecting...";
                     _statusLabel.ForeColor = Theme.AccentOrange;
@@ -2381,6 +2388,12 @@ namespace RadioRelay.Client
                 }
                 catch (Exception ex)
                 {
+                    lock (_relayClientCallbackLock)
+                    {
+                        if (ReferenceEquals(_relayClient, relayClient))
+                            _relayClient = null;
+                    }
+                    relayClient.Dispose();
                     LogSafe($"Connect failed: {ex.Message}");
                     ClientDiagnostics.Current?.LogException(ErrorCodes.ClientConnectFailure, "connect failed from MainForm", ex);
                 }
@@ -2389,7 +2402,13 @@ namespace RadioRelay.Client
             {
                 bool hadEstablishedConnection = _connectionEstablished;
                 _connectionEstablished = false;
-                _relayClient.Disconnect();
+                lock (_relayClientCallbackLock)
+                {
+                    if (!ReferenceEquals(_relayClient, currentClient)) return;
+                    _audioEngine?.SendActiveTransmissionEnds();
+                    _relayClient = null;
+                }
+                currentClient.Dispose();
                 _statusLabel.Text = "Disconnected";
                 _statusLabel.ForeColor = Theme.AccentRed;
                 _connectButton.Text = "Connect";
@@ -2397,6 +2416,75 @@ namespace RadioRelay.Client
                 OnTotalUserCountUpdated(0);
                 OnConnectedClientNamesUpdated(Array.Empty<string>());
                 if (hadEstablishedConnection) _audioEngine?.PlayDisconnectedBeep();
+            }
+        }
+
+        private void OnRelayStatusChanged(RelayClient source, string message)
+        {
+            lock (_relayClientCallbackLock)
+            {
+                if (!ReferenceEquals(_relayClient, source)) return;
+                if (InvokeRequired)
+                {
+                    PostToUi(() => OnRelayStatusChanged(source, message));
+                    return;
+                }
+
+                LogSafe(message);
+            }
+        }
+
+        private void OnRelayAudioReceived(RelayClient source, AudioPacket packet)
+        {
+            lock (_relayClientCallbackLock)
+            {
+                if (!ReferenceEquals(_relayClient, source)) return;
+                _audioEngine?.OnAudioReceived(packet);
+            }
+        }
+
+        private void OnPresenceUpdated(RelayClient source, PresenceChannelCount[] counts)
+        {
+            lock (_relayClientCallbackLock)
+            {
+                if (!ReferenceEquals(_relayClient, source)) return;
+                if (InvokeRequired)
+                {
+                    PostToUi(() => OnPresenceUpdated(source, counts));
+                    return;
+                }
+
+                OnPresenceUpdated(counts);
+            }
+        }
+
+        private void OnTotalUserCountUpdated(RelayClient source, int count)
+        {
+            lock (_relayClientCallbackLock)
+            {
+                if (!ReferenceEquals(_relayClient, source)) return;
+                if (InvokeRequired)
+                {
+                    PostToUi(() => OnTotalUserCountUpdated(source, count));
+                    return;
+                }
+
+                OnTotalUserCountUpdated(count);
+            }
+        }
+
+        private void OnConnectedClientNamesUpdated(RelayClient source, string[] names)
+        {
+            lock (_relayClientCallbackLock)
+            {
+                if (!ReferenceEquals(_relayClient, source)) return;
+                if (InvokeRequired)
+                {
+                    PostToUi(() => OnConnectedClientNamesUpdated(source, names));
+                    return;
+                }
+
+                OnConnectedClientNamesUpdated(names);
             }
         }
 
@@ -2442,9 +2530,38 @@ namespace RadioRelay.Client
                 sortedNames);
         }
 
-        private void OnConnectionHealthChanged(bool healthy)
+        private void OnConnectionHealthChanged(RelayClient source, bool healthy)
         {
-            if (InvokeRequired) { PostToUi(() => OnConnectionHealthChanged(healthy)); return; }
+            if (InvokeRequired)
+            {
+                // End epochs synchronously before server deregistration.
+                lock (_relayClientCallbackLock)
+                {
+                    if (!ReferenceEquals(_relayClient, source)) return;
+                    if (!healthy)
+                        _audioEngine?.SendActiveTransmissionEnds();
+                }
+                PostToUi(() => ApplyConnectionHealthChanged(
+                    source,
+                    healthy,
+                    transmissionEndsAlreadySent: !healthy));
+                return;
+            }
+
+            lock (_relayClientCallbackLock)
+            {
+                if (!ReferenceEquals(_relayClient, source)) return;
+            }
+            ApplyConnectionHealthChanged(source, healthy, transmissionEndsAlreadySent: false);
+        }
+
+        private void ApplyConnectionHealthChanged(
+            RelayClient source,
+            bool healthy,
+            bool transmissionEndsAlreadySent)
+        {
+            if (!ReferenceEquals(_relayClient, source) || !source.IsConnected) return;
+            if (healthy && !source.IsHealthy) return;
 
             if (healthy)
             {
@@ -2456,6 +2573,7 @@ namespace RadioRelay.Client
                 {
                     _audioEngine?.PlayConnectedBeep();
                     ResubscribeIfConnected();
+                    _audioEngine?.RestartActiveTransmissionStreams();
                 }
                 LogSafe(wasEstablished ? "Connection restored." : "Connection established.");
             }
@@ -2463,9 +2581,14 @@ namespace RadioRelay.Client
             {
                 bool hadEstablishedConnection = _connectionEstablished;
                 _connectionEstablished = false;
+                if (!transmissionEndsAlreadySent)
+                    _audioEngine?.SendActiveTransmissionEnds();
                 if (hadEstablishedConnection) _audioEngine?.PlayDisconnectedBeep();
                 _statusLabel.Text = "Error";
                 _statusLabel.ForeColor = Theme.AccentRed;
+                OnPresenceUpdated(Array.Empty<PresenceChannelCount>());
+                OnTotalUserCountUpdated(0);
+                OnConnectedClientNamesUpdated(Array.Empty<string>());
                 LogSafe("No response from server.");
             }
         }
@@ -2505,8 +2628,20 @@ namespace RadioRelay.Client
             _updateCheckCancellation.Dispose();
             SaveCurrentSettings();
 
-            foreach (var timer in _pttReleaseTimers.Values) timer.Dispose();
-            _relayClient?.Disconnect();
+            lock (_pttReleaseTimerLock)
+            {
+                foreach (var timer in _pttReleaseTimers.Values) timer.Dispose();
+                _pttReleaseTimers.Clear();
+                _pttReleaseGenerations.Clear();
+            }
+            RelayClient? relayClient;
+            lock (_relayClientCallbackLock)
+            {
+                _audioEngine?.SendActiveTransmissionEnds();
+                relayClient = _relayClient;
+                _relayClient = null;
+            }
+            relayClient?.Dispose();
             _audioEngine?.Dispose();
             _pttInput.Dispose();
             _overlay.Close();

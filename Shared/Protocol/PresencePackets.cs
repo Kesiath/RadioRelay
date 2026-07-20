@@ -101,8 +101,7 @@ namespace RadioRelay.Shared.Protocol
             w.Write((ushort)Math.Clamp(ConnectedClientNames.Length, 0, ushort.MaxValue));
             foreach (var name in ConnectedClientNames.Take(ushort.MaxValue))
                 WireString.Write(w, name);
-            // Appended membership detail keeps older clients compatible: they
-            // stop after TotalUserCount and simply ignore this trailing data.
+            // Keep membership detail trailing so clients may stop after the total count.
             w.Write((ushort)Math.Clamp(Counts.Length, 0, ushort.MaxValue));
             foreach (var count in Counts.Take(ushort.MaxValue))
             {

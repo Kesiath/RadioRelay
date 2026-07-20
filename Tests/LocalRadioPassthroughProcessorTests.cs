@@ -70,6 +70,27 @@ public class LocalRadioPassthroughProcessorTests
     }
 
     [Fact]
+    public void Simultaneous_radios_keep_full_mixer_gain_instead_of_being_averaged()
+    {
+        var first = new RadioChannel { IsIntercom = true, Ear = RadioEar.Both };
+        var second = new RadioChannel { IsIntercom = true, Ear = RadioEar.Both };
+        var opus = new OpusCodec(AudioEngine.SampleRate).Encode(ToneFrame());
+
+        var single = new LocalRadioPassthroughProcessor().Process(new[] { (first, opus) });
+        var combined = new LocalRadioPassthroughProcessor().Process(new[]
+        {
+            (first, opus),
+            (second, opus)
+        });
+
+        int singlePeak = single.Max(sample => Math.Abs((int)sample));
+        int combinedPeak = combined.Max(sample => Math.Abs((int)sample));
+        Assert.True(combinedPeak > singlePeak * 1.70f,
+            $"single={singlePeak}, combined={combinedPeak}");
+        Assert.All(combined, sample => Assert.InRange(sample, short.MinValue, short.MaxValue));
+    }
+
+    [Fact]
     public void Input_gain_zero_silences_clean_intercom_passthrough()
     {
         var processor = new LocalRadioPassthroughProcessor();
@@ -120,19 +141,21 @@ public class LocalRadioPassthroughProcessorTests
     [Fact]
     public void Passthrough_and_remote_rx_share_the_same_post_decode_processing()
     {
-        var radio = new RadioChannel { IsIntercom = true, Ear = RadioEar.Left };
+        var radio = new RadioChannel { Frequency = 251f, Ear = RadioEar.Left };
         var opus = new OpusCodec(AudioEngine.SampleRate).Encode(ToneFrame());
         var expectedDecoded = new OpusCodec(AudioEngine.SampleRate).Decode(opus);
         var expectedProfile = RadioEffectProfile.ForBand(
             RadioBandExtensions.FromFrequencyMHz(radio.Frequency),
             radio.IsIntercom,
             AudioEngine.SampleRate);
-        int noisePosition = 0;
+        expectedProfile.ResetReceive();
+        var expectedNoise = new RadioNoiseGenerator();
+        expectedNoise.Reset(RadioTransmissionNoiseSeed.FromOpusPayload(opus));
         var expected = RadioReceiveFrameProcessor.Process(
             expectedDecoded,
             radio,
             expectedProfile,
-            ref noisePosition);
+            expectedNoise);
 
         var actual = new LocalRadioPassthroughProcessor().Process(new[] { (radio, opus) });
 
@@ -142,6 +165,64 @@ public class LocalRadioPassthroughProcessorTests
             Assert.Equal(expectedLeft, actual[i * 2]);
             Assert.Equal(0, actual[i * 2 + 1]);
         }
+    }
+
+    [Fact]
+    public void Passthrough_state_resets_cleanly_for_each_ptt_session()
+    {
+        var radio = new RadioChannel { Frequency = 251f, Ear = RadioEar.Both };
+        var opus = new OpusCodec(AudioEngine.SampleRate).Encode(ToneFrame());
+        var processor = new LocalRadioPassthroughProcessor();
+
+        var first = processor.Process(new[] { (radio, opus) });
+        processor.Process(new[] { (radio, opus) });
+        processor.ResetChannel(radio);
+        var reset = processor.Process(new[] { (radio, opus) });
+
+        Assert.Equal(first, reset);
+    }
+
+    [Fact]
+    public void Shared_transmission_seed_keeps_passthrough_and_remote_noise_identical()
+    {
+        const uint seed = 0x5A17C0DEu;
+        var radio = new RadioChannel { Frequency = 42.5f, Ear = RadioEar.Right };
+        var opus = new OpusCodec(AudioEngine.SampleRate).Encode(ToneFrame());
+        var expectedDecoded = new OpusCodec(AudioEngine.SampleRate).Decode(opus);
+        var expectedProfile = RadioEffectProfile.ForBand(
+            RadioBandExtensions.FromFrequencyMHz(radio.Frequency),
+            radio.IsIntercom,
+            AudioEngine.SampleRate);
+        expectedProfile.ResetReceive();
+        var expectedNoise = new RadioNoiseGenerator(seed);
+        var expected = RadioReceiveFrameProcessor.Process(
+            expectedDecoded,
+            radio,
+            expectedProfile,
+            expectedNoise);
+
+        var actual = new LocalRadioPassthroughProcessor().Process(new[] { (radio, opus, seed) });
+
+        for (int i = 0; i < expected.Length; i++)
+        {
+            short expectedRight = (short)Math.Clamp(expected[i] * 32767f, short.MinValue, short.MaxValue);
+            Assert.Equal(0, actual[i * 2]);
+            Assert.Equal(expectedRight, actual[i * 2 + 1]);
+        }
+    }
+
+    [Fact]
+    public void Different_ptt_seeds_create_different_receiver_texture()
+    {
+        var radio = new RadioChannel { Frequency = 251f, Ear = RadioEar.Both };
+        var opus = new OpusCodec(AudioEngine.SampleRate).Encode(ToneFrame());
+        var processor = new LocalRadioPassthroughProcessor();
+
+        var first = processor.Process(new[] { (radio, opus, 101u) });
+        processor.ResetChannel(radio);
+        var second = processor.Process(new[] { (radio, opus, 202u) });
+
+        Assert.False(first.SequenceEqual(second));
     }
 
     [Fact]

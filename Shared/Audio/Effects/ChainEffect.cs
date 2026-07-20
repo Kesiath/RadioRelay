@@ -1,8 +1,8 @@
 namespace RadioRelay.Shared.Audio.Effects
 {
-    /// DCS-SRS "$type": "chain" (and also used for the "filters"
-    /// grouping, which is structurally identical -- an ordered sequence of
-    /// sub-effects applied one after another).
+    /// <summary>
+    /// Ordered sequence of independently resettable audio effects.
+    /// </summary>
     public class ChainEffect : IAudioEffect
     {
         private readonly IAudioEffect[] _effects;
@@ -16,6 +16,12 @@ namespace RadioRelay.Shared.Audio.Effects
         {
             foreach (var effect in _effects)
                 effect.Process(samples);
+        }
+
+        public void Reset()
+        {
+            foreach (var effect in _effects)
+                effect.Reset();
         }
     }
 }

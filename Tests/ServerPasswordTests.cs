@@ -120,7 +120,10 @@ public class ServerPasswordTests
         if (completed == runTask)
         {
             try { await runTask; }
-            catch { /* Preserve the original assertion failure when the server crashed before cancellation. */ }
+            catch
+            {
+                // Preserve the original assertion failure.
+            }
         }
     }
 }

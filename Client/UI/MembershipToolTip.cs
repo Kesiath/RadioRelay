@@ -47,9 +47,7 @@ namespace RadioRelay.Client.UI
     }
 
     /// <summary>
-    /// Hover membership popup implemented as a real borderless RadioRelay
-    /// window rather than a native Windows tooltip. Its window region is
-    /// rounded, so no rectangular native background can leak around corners.
+    /// Displays radio membership in a rounded borderless popup.
     /// </summary>
     internal sealed class MembershipToolTip : IDisposable
     {
@@ -81,8 +79,7 @@ namespace RadioRelay.Client.UI
             _content[control] = new Content(title, sorted);
 
             if (control.Tag is MembershipHoverMarker) return;
-            // Tag is already used by some WinForms controls, so retain it in
-            // the marker and restore it when this helper is disposed.
+            // Preserve and restore any existing control Tag value.
             control.Tag = new MembershipHoverMarker(control.Tag);
             control.MouseEnter += OnMouseEnter;
             control.MouseLeave += OnMouseLeave;

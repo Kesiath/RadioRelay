@@ -2,11 +2,10 @@ using System;
 
 namespace RadioRelay.Client.AudioEngineNs
 {
-    /// Band-limited, stateful 3x interpolator from the 16 kHz stereo receive
-    /// frame to 48 kHz stereo PCM. It is deliberately push-driven: every
-    /// 20 ms input frame produces exactly one 20 ms output frame, so an
-    /// output callback can never manufacture silence by reading beyond the
-    /// currently available input block.
+    /// <summary>
+    /// Converts each 16 kHz stereo frame to a matching 48 kHz frame with
+    /// stateful, band-limited interpolation.
+    /// </summary>
     internal sealed class LocalPassthroughOutputConverter
     {
         private const int InterpolationFactor = 3;
@@ -95,7 +94,7 @@ namespace RadioRelay.Client.AudioEngineNs
         {
             var coefficients = new double[TapCount];
             int center = (TapCount - 1) / 2;
-            const double cutoffCyclesPerOutputSample = 1.0 / 6.0; // 8 kHz at 48 kHz
+            const double cutoffCyclesPerOutputSample = 1.0 / 6.0; // 8 kHz at 48 kHz.
             double sum = 0;
 
             for (int tap = 0; tap < TapCount; tap++)

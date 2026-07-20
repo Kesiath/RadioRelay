@@ -14,21 +14,20 @@ namespace RadioRelay.Client.Input
         public bool Pressed;
     }
 
-    /// 
-    /// Polls every connected DirectInput joystick/gamepad/HOTAS device for
-    /// button state changes. DirectInput (rather than XInput) is used
-    /// deliberately -- XInput only covers Xbox-style controllers, while
-    /// DirectInput covers arbitrary flight sticks, throttles and pedals,
-    /// which is what most DCS/TFAR-style users actually bind PTT to. Note:
-    /// some Xbox/XInput-only pads expose buttons inconsistently through
-    /// DirectInput -- see README.md if yours doesn't show up.
-    /// 
+    /// <summary>
+    /// Polls DirectInput devices for button changes, including HOTAS hardware
+    /// not exposed through XInput.
+    /// </summary>
     public class JoystickPoller : IDisposable
     {
         private readonly DirectInput _directInput = new();
         private readonly Dictionary<Guid, Joystick> _devices = new();
         private readonly Dictionary<Guid, bool[]> _lastButtonStates = new();
+        private readonly object _deviceLock = new();
         private System.Threading.Timer? _pollTimer;
+        private int _polling;
+        private int _pollCount;
+        private volatile bool _disposed;
 
         public event EventHandler<JoystickButtonEventArgs>? ButtonChanged;
 
@@ -38,25 +37,31 @@ namespace RadioRelay.Client.Input
             _pollTimer = new System.Threading.Timer(_ => Poll(), null, 0, 15);
         }
 
-        /// Call periodically (or on demand from the UI) to pick up
-        /// devices plugged in after startup.
+        /// <summary>
+        /// Refreshes devices connected after startup.
+        /// </summary>
         public void RefreshDevices()
         {
-            var found = _directInput.GetDevices(DeviceClass.GameControl, DeviceEnumerationFlags.AttachedOnly);
-            foreach (var deviceInfo in found)
+            if (_disposed) return;
+            lock (_deviceLock)
             {
-                if (_devices.ContainsKey(deviceInfo.InstanceGuid)) continue;
-                try
+                if (_disposed) return;
+                var found = _directInput.GetDevices(DeviceClass.GameControl, DeviceEnumerationFlags.AttachedOnly);
+                foreach (var deviceInfo in found)
                 {
-                    var joystick = new Joystick(_directInput, deviceInfo.InstanceGuid);
-                    joystick.Properties.BufferSize = 128;
-                    joystick.Acquire();
-                    _devices[deviceInfo.InstanceGuid] = joystick;
-                    _lastButtonStates[deviceInfo.InstanceGuid] = Array.Empty<bool>();
-                }
-                catch
-                {
-                    // Device busy or inaccessible right now -- next refresh can retry.
+                    if (_devices.ContainsKey(deviceInfo.InstanceGuid)) continue;
+                    try
+                    {
+                        var joystick = new Joystick(_directInput, deviceInfo.InstanceGuid);
+                        joystick.Properties.BufferSize = 128;
+                        joystick.Acquire();
+                        _devices[deviceInfo.InstanceGuid] = joystick;
+                        _lastButtonStates[deviceInfo.InstanceGuid] = Array.Empty<bool>();
+                    }
+                    catch
+                    {
+                        // Retry unavailable devices on the next refresh.
+                    }
                 }
             }
         }
@@ -64,54 +69,117 @@ namespace RadioRelay.Client.Input
         public IEnumerable<(Guid Guid, string Name)> GetDeviceNames()
         {
             RefreshDevices();
-            return _directInput.GetDevices(DeviceClass.GameControl, DeviceEnumerationFlags.AttachedOnly)
-                .Select(d => (d.InstanceGuid, d.InstanceName));
+            lock (_deviceLock)
+            {
+                if (_disposed) return Array.Empty<(Guid, string)>();
+                return _directInput.GetDevices(DeviceClass.GameControl, DeviceEnumerationFlags.AttachedOnly)
+                    .Select(d => (d.InstanceGuid, d.InstanceName))
+                    .ToArray();
+            }
         }
 
         private void Poll()
         {
-            foreach (var kvp in _devices.ToList())
+            if (_disposed) return;
+            if (Interlocked.Exchange(ref _polling, 1) != 0) return;
+            try
             {
-                var guid = kvp.Key;
-                var joystick = kvp.Value;
-                JoystickState state;
-                try
-                {
-                    joystick.Poll();
-                    state = joystick.GetCurrentState();
-                }
-                catch
-                {
-                    continue; // device unplugged etc -- leave it, don't crash the poll loop
-                }
+                if (_disposed) return;
+                if (++_pollCount % 133 == 0)
+                    RefreshDevices();
 
-                var buttons = state.Buttons;
-                if (!_lastButtonStates.TryGetValue(guid, out var last) || last.Length != buttons.Length)
-                    last = new bool[buttons.Length];
+                KeyValuePair<Guid, Joystick>[] devices;
+                lock (_deviceLock)
+                    devices = _devices.ToArray();
 
-                for (int i = 0; i < buttons.Length; i++)
+                foreach (var kvp in devices)
                 {
-                    if (buttons[i] != last[i])
+                    var guid = kvp.Key;
+                    var joystick = kvp.Value;
+                    JoystickState state;
+                    try
                     {
-                        ButtonChanged?.Invoke(this, new JoystickButtonEventArgs
+                        joystick.Poll();
+                        state = joystick.GetCurrentState();
+                    }
+                    catch
+                    {
+                        // Release held buttons before removing an unavailable device.
+                        bool[]? heldButtons;
+                        lock (_deviceLock)
+                            _lastButtonStates.TryGetValue(guid, out heldButtons);
+                        if (heldButtons != null)
                         {
-                            DeviceGuid = guid,
-                            DeviceName = joystick.Information.InstanceName,
-                            ButtonIndex = i,
-                            Pressed = buttons[i]
-                        });
+                            for (int i = 0; i < heldButtons.Length; i++)
+                            {
+                                if (!heldButtons[i]) continue;
+                                ButtonChanged?.Invoke(this, new JoystickButtonEventArgs
+                                {
+                                    DeviceGuid = guid,
+                                    DeviceName = joystick.Information.InstanceName,
+                                    ButtonIndex = i,
+                                    Pressed = false
+                                });
+                            }
+                        }
+
+                        lock (_deviceLock)
+                        {
+                            _lastButtonStates.Remove(guid);
+                            _devices.Remove(guid);
+                        }
+                        try { joystick.Dispose(); } catch { }
+                        continue;
+                    }
+
+                    var buttons = state.Buttons;
+                    bool[] last;
+                    lock (_deviceLock)
+                    {
+                        if (!_lastButtonStates.TryGetValue(guid, out last!) || last.Length != buttons.Length)
+                            last = new bool[buttons.Length];
+                    }
+
+                    for (int i = 0; i < buttons.Length; i++)
+                    {
+                        if (buttons[i] != last[i])
+                        {
+                            ButtonChanged?.Invoke(this, new JoystickButtonEventArgs
+                            {
+                                DeviceGuid = guid,
+                                DeviceName = joystick.Information.InstanceName,
+                                ButtonIndex = i,
+                                Pressed = buttons[i]
+                            });
+                        }
+                    }
+
+                    lock (_deviceLock)
+                    {
+                        if (_devices.ContainsKey(guid))
+                            _lastButtonStates[guid] = buttons;
                     }
                 }
-
-                _lastButtonStates[guid] = buttons;
+            }
+            finally
+            {
+                Volatile.Write(ref _polling, 0);
             }
         }
 
         public void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
             _pollTimer?.Dispose();
-            foreach (var d in _devices.Values) d.Dispose();
-            _directInput.Dispose();
+            SpinWait.SpinUntil(() => Volatile.Read(ref _polling) == 0, TimeSpan.FromSeconds(1));
+            lock (_deviceLock)
+            {
+                foreach (var d in _devices.Values) d.Dispose();
+                _devices.Clear();
+                _lastButtonStates.Clear();
+                _directInput.Dispose();
+            }
         }
     }
 }

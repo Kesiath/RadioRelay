@@ -6,10 +6,7 @@ using System.Windows.Forms;
 namespace RadioRelay.Client.UI
 {
     /// <summary>
-    /// Lightweight, fully drawn slider used in place of the native WinForms
-    /// TrackBar so the application keeps a consistent dark appearance at all
-    /// DPI scales. It preserves the familiar Minimum/Maximum/Value contract
-    /// and ValueChanged event used by the existing audio logic.
+    /// Draws a DPI-aware dark slider with standard range and value behavior.
     /// </summary>
     public sealed class ModernSlider : Control
     {
@@ -83,6 +80,7 @@ namespace RadioRelay.Client.UI
 
         public int SmallChange { get; set; } = 1;
         public int LargeChange { get; set; } = 5;
+        public bool FocusOnPointerInteraction { get; set; } = true;
         private Color _accentColor = Theme.AccentGreen;
 
         public Color AccentColor
@@ -149,7 +147,7 @@ namespace RadioRelay.Client.UI
         {
             base.OnMouseDown(e);
             if (!Enabled || e.Button != MouseButtons.Left) return;
-            Focus();
+            if (FocusOnPointerInteraction) Focus();
             Capture = true;
             _dragging = true;
             SetValueFromX(e.X);

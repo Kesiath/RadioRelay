@@ -5,19 +5,28 @@ using RadioRelay.Shared.Audio;
 
 namespace RadioRelay.Client.AudioEngineNs
 {
-    /// Decodes the exact Opus packets emitted by the real transmit path and
-    /// sends them through the same post-decode processing used by remote RX.
-    /// Network jitter and RX key sounds are deliberately not part of this
-    /// local recording path.
+    internal readonly record struct LocalRadioPassthroughFrame(
+        RadioChannel Channel,
+        byte[] OpusPayload,
+        uint TransmissionAudioSeed,
+        ulong TransmissionId,
+        float Frequency,
+        bool IsIntercom,
+        RadioEar Ear);
+
+    /// <summary>
+    /// Runs transmitted Opus frames through receive-equivalent DSP for local recording.
+    /// </summary>
     internal sealed class LocalRadioPassthroughProcessor
     {
         private sealed class ChannelState
         {
             public required RadioBand Band { get; init; }
             public required bool IsIntercom { get; init; }
+            public required ulong TransmissionId { get; init; }
             public required RadioEffectProfile Profile { get; init; }
             public OpusCodec Decoder { get; } = new(AudioEngine.SampleRate);
-            public int NoiseLoopPosition;
+            public RadioNoiseGenerator Noise { get; } = new();
         }
 
         private readonly Dictionary<RadioChannel, ChannelState> _states = new();
@@ -25,36 +34,69 @@ namespace RadioRelay.Client.AudioEngineNs
         public short[] Process(
             IReadOnlyList<(RadioChannel Channel, byte[] OpusPayload)> encodedFrames)
         {
+            var seededFrames = new (RadioChannel Channel, byte[] OpusPayload, uint TransmissionAudioSeed)[encodedFrames.Count];
+            for (int i = 0; i < encodedFrames.Count; i++)
+            {
+                var frame = encodedFrames[i];
+                seededFrames[i] = (
+                    frame.Channel,
+                    frame.OpusPayload,
+                    RadioTransmissionNoiseSeed.FromOpusPayload(frame.OpusPayload));
+            }
+
+            return Process(seededFrames);
+        }
+
+        public short[] Process(
+            IReadOnlyList<(RadioChannel Channel, byte[] OpusPayload, uint TransmissionAudioSeed)> encodedFrames)
+        {
+            var frames = new LocalRadioPassthroughFrame[encodedFrames.Count];
+            for (int i = 0; i < encodedFrames.Count; i++)
+            {
+                var frame = encodedFrames[i];
+                frames[i] = new LocalRadioPassthroughFrame(
+                    frame.Channel,
+                    frame.OpusPayload,
+                    frame.TransmissionAudioSeed,
+                    0,
+                    frame.Channel.Frequency,
+                    frame.Channel.IsIntercom,
+                    frame.Channel.Ear);
+            }
+
+            return Process(frames);
+        }
+
+        public short[] Process(IReadOnlyList<LocalRadioPassthroughFrame> encodedFrames)
+        {
             if (encodedFrames.Count == 0) return Array.Empty<short>();
 
             var mixedLeft = new float[OpusCodec.FrameSize];
             var mixedRight = new float[OpusCodec.FrameSize];
-            int leftContributors = 0;
-            int rightContributors = 0;
-            foreach (var encodedFrame in encodedFrames)
-            {
-                if (encodedFrame.Channel.Ear != RadioEar.Right) leftContributors++;
-                if (encodedFrame.Channel.Ear != RadioEar.Left) rightContributors++;
-            }
 
             foreach (var encodedFrame in encodedFrames)
             {
                 var channel = encodedFrame.Channel;
-                var state = GetState(channel);
+                var state = GetState(
+                    channel,
+                    encodedFrame.TransmissionAudioSeed,
+                    encodedFrame.TransmissionId,
+                    encodedFrame.Frequency,
+                    encodedFrame.IsIntercom,
+                    encodedFrame.OpusPayload);
                 var decodedPcm = state.Decoder.Decode(encodedFrame.OpusPayload);
                 var receivedFrame = RadioReceiveFrameProcessor.Process(
                     decodedPcm,
-                    channel,
+                    encodedFrame.Frequency,
+                    encodedFrame.IsIntercom,
                     state.Profile,
-                    ref state.NoiseLoopPosition);
+                    state.Noise);
 
-                var (leftGain, rightGain) = EarGains(channel.Ear);
-                float leftScale = leftContributors == 0 ? 0f : leftGain / leftContributors;
-                float rightScale = rightContributors == 0 ? 0f : rightGain / rightContributors;
+                var (leftGain, rightGain) = EarGains(encodedFrame.Ear);
                 for (int i = 0; i < receivedFrame.Length; i++)
                 {
-                    mixedLeft[i] = Math.Clamp(mixedLeft[i] + receivedFrame[i] * leftScale, -1f, 1f);
-                    mixedRight[i] = Math.Clamp(mixedRight[i] + receivedFrame[i] * rightScale, -1f, 1f);
+                    mixedLeft[i] += receivedFrame[i] * leftGain;
+                    mixedRight[i] += receivedFrame[i] * rightGain;
                 }
             }
 
@@ -66,12 +108,21 @@ namespace RadioRelay.Client.AudioEngineNs
             _states.Clear();
         }
 
-        private ChannelState GetState(RadioChannel channel)
+        public void ResetChannel(RadioChannel channel) => _states.Remove(channel);
+
+        private ChannelState GetState(
+            RadioChannel channel,
+            uint transmittedSeed,
+            ulong transmissionId,
+            float frequency,
+            bool isIntercom,
+            ReadOnlySpan<byte> opusPayload)
         {
-            var band = RadioBandExtensions.FromFrequencyMHz(channel.Frequency);
+            var band = RadioBandExtensions.FromFrequencyMHz(frequency);
             if (_states.TryGetValue(channel, out var state) &&
                 state.Band == band &&
-                state.IsIntercom == channel.IsIntercom)
+                state.IsIntercom == isIntercom &&
+                (transmissionId == 0 || state.TransmissionId == transmissionId))
             {
                 return state;
             }
@@ -79,9 +130,15 @@ namespace RadioRelay.Client.AudioEngineNs
             state = new ChannelState
             {
                 Band = band,
-                IsIntercom = channel.IsIntercom,
-                Profile = RadioEffectProfile.ForBand(band, channel.IsIntercom, AudioEngine.SampleRate)
+                IsIntercom = isIntercom,
+                TransmissionId = transmissionId,
+                Profile = RadioEffectProfile.ForBand(
+                    band,
+                    isIntercom,
+                    AudioEngine.SampleRate)
             };
+            state.Profile.ResetReceive();
+            state.Noise.Reset(RadioTransmissionNoiseSeed.Resolve(transmittedSeed, opusPayload));
             _states[channel] = state;
             return state;
         }
@@ -98,8 +155,14 @@ namespace RadioRelay.Client.AudioEngineNs
             var pcm = new short[left.Length * 2];
             for (int i = 0; i < left.Length; i++)
             {
-                pcm[i * 2] = (short)Math.Clamp(left[i] * 32767f, short.MinValue, short.MaxValue);
-                pcm[i * 2 + 1] = (short)Math.Clamp(right[i] * 32767f, short.MinValue, short.MaxValue);
+                pcm[i * 2] = (short)Math.Clamp(
+                    SoftLimiterSampleProvider.Limit(left[i]) * 32767f,
+                    short.MinValue,
+                    short.MaxValue);
+                pcm[i * 2 + 1] = (short)Math.Clamp(
+                    SoftLimiterSampleProvider.Limit(right[i]) * 32767f,
+                    short.MinValue,
+                    short.MaxValue);
             }
             return pcm;
         }

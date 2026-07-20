@@ -2,7 +2,9 @@ namespace RadioRelay.Server
 {
     public sealed class ServerCommandLineSettings
     {
+        /// <summary>
         /// Environment variable / .env keys the server understands.
+        /// </summary>
         public const string PortKey = "PORT";
         public const string PasswordKey = "PASSWORD";
 

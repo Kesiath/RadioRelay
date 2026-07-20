@@ -6,9 +6,7 @@ using System.Windows.Forms;
 namespace RadioRelay.Client.UI
 {
     /// <summary>
-    /// Rounded TableLayoutPanel used as the structural card throughout the
-    /// main window. It remains a normal layout container, so existing controls
-    /// and event wiring are unchanged.
+    /// Draws a rounded table-layout card used by the main window.
     /// </summary>
     public class ModernCard : TableLayoutPanel
     {
@@ -73,7 +71,9 @@ namespace RadioRelay.Client.UI
 
 namespace RadioRelay.Client.UI
 {
-    /// <summary>Rounded card variant for free-form docked content.</summary>
+    /// <summary>
+    /// Draws a rounded card for free-form docked content.
+    /// </summary>
     public class ModernPanel : Panel
     {
         public ModernPanel()

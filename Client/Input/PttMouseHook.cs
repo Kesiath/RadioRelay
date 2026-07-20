@@ -3,11 +3,9 @@ using System.Runtime.InteropServices;
 
 namespace RadioRelay.Client.Input
 {
-    /// 
-    /// Global low-level mouse hook for mouse side buttons. Reports XBUTTON1
-    /// and XBUTTON2 system-wide so mouse button 4/5 can be bound directly as
-    /// PTT even while another app has focus.
-    /// 
+    /// <summary>
+    /// Reports global mouse side-button transitions to the PTT binding manager.
+    /// </summary>
     public class PttMouseHook : IDisposable
     {
         private const int WH_MOUSE_LL = 14;

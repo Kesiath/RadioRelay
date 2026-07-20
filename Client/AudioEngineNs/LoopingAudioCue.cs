@@ -2,9 +2,9 @@ using System;
 
 namespace RadioRelay.Client.AudioEngineNs
 {
-    /// Small stateful loop reader for warning cues that need to last
-    /// as long as a condition remains active, not merely for the length of one
-    /// recorded asset.
+    /// <summary>
+    /// Repeats a recorded cue while its condition remains active.
+    /// </summary>
     internal sealed class LoopingAudioCue
     {
         private readonly float[] _source;

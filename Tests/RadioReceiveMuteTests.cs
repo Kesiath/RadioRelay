@@ -88,8 +88,10 @@ public class RadioReceiveMuteTests
         var secondTick = jitter.Tick();
 
         Assert.False(firstTick.IsFirstFrame);
+        Assert.True(firstTick.IsLastFrame);
         Assert.Null(firstTick.Pcm);
         Assert.False(secondTick.IsFirstFrame);
+        Assert.False(secondTick.IsLastFrame);
         Assert.Null(secondTick.Pcm);
     }
 

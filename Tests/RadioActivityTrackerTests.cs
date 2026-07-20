@@ -77,9 +77,7 @@ public class RadioActivityTrackerTests
         var channel = new RadioChannel { Name = "Radio 1", Frequency = 303.45f };
         var remote = Guid.NewGuid().ToString();
 
-        // UI callbacks can be posted from different audio/network timer
-        // threads. If the End callback reaches the UI first, a delayed older
-        // Start must not resurrect an RX row after audio already stopped.
+        // A delayed Start must not resurrect activity after a newer End.
         tracker.RemoteEnded(channel, remote, lifecycleSequence: 2);
         tracker.RemoteStarted(channel, remote, lifecycleSequence: 1);
 

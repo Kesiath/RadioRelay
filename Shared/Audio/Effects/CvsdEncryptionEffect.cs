@@ -2,25 +2,47 @@ using System;
 
 namespace RadioRelay.Shared.Audio.Effects
 {
-    /// DCS-SRS "$type": "cvsd" -- a cosmetic simulation of a
-    /// Continuously Variable Slope Delta modulator, the kind of coarse
-    /// 1-bit-per-sample codec real secure/encrypted radios historically
-    /// used. This is purely a SOUND CHARACTER effect (gives encrypted
-    /// transmissions a distinct gritty/robotic quality) and has nothing to
-    /// do with this app's actual security -- that's handled separately by
-    /// real AES-256-GCM encryption regardless of whether this effect is
-    /// applied. Coarsens the signal into fixed-size up/down steps rather
-    /// than reproducing it exactly, which is what produces the
-    /// characteristic buzzy quantization texture.
+    /// <summary>
+    /// Adds mild CVSD-style coloration without providing transport security.
+    /// </summary>
     public class CvsdEncryptionEffect : IAudioEffect
     {
-        private const int Levels = 128;
+        private const float WetMix = 0.20f;
+        private const float MinimumStep = 0.004f;
+        private const float MaximumStep = 0.20f;
+        private float _reference;
+        private float _step = 0.018f;
+        private int _recentBits;
+
         public void Process(float[] samples)
         {
             for (int i = 0; i < samples.Length; i++)
             {
-                samples[i] = MathF.Round(samples[i] * Levels) / Levels;
+                float dry = samples[i];
+                int bit = dry >= _reference ? 1 : 0;
+                _recentBits = ((_recentBits << 1) | bit) & 0b111;
+
+                if (_recentBits is 0 or 0b111)
+                    _step = Math.Min(MaximumStep, _step * 1.22f);
+                else
+                    _step = Math.Max(MinimumStep, _step * 0.94f);
+
+                _reference = Math.Clamp(
+                    _reference + (bit == 1 ? _step : -_step),
+                    -1f,
+                    1f);
+                samples[i] = Math.Clamp(
+                    dry * (1f - WetMix) + _reference * WetMix,
+                    -1f,
+                    1f);
             }
+        }
+
+        public void Reset()
+        {
+            _reference = 0f;
+            _step = 0.018f;
+            _recentBits = 0;
         }
     }
 }

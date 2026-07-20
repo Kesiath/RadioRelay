@@ -10,18 +10,9 @@ using RadioRelay.Client.Radio;
 
 namespace RadioRelay.Client.UI
 {
-    /// 
-    /// Full-screen, always-on-top HUD overlay (on top of any other
-    /// application, including full-screen games) that draws one independent
-    /// "chip" per radio -- each with its own color, its own screen position
-    /// (user-draggable, persisted), shown only while that specific radio is
-    /// actively transmitting or receiving. Normally fully click-through.
-    /// While layout edit mode is on, only the chip rectangles themselves
-    /// become clickable/draggable (via a WM_NCHITTEST override) -- every
-    /// other point on screen still passes clicks through underneath, so
-    /// entering edit mode never blocks interacting with the rest of the
-    /// desktop, including the main app's own window.
-    /// 
+    /// <summary>
+    /// Displays draggable, per-radio TX and RX activity chips in a click-through overlay.
+    /// </summary>
     public class TransmissionOverlayForm : Form
     {
         private class ChipState
@@ -32,11 +23,9 @@ namespace RadioRelay.Client.UI
             public bool HasContent => TxWho != null || RxWhos.Count > 0;
         }
 
-        /// One active TX or RX entry on a chip: a header line
-        /// (direction/radio/frequency) and, on its own line below it, the
-        /// full callsign -- kept separate rather than a single formatted
-        /// string so a long callsign gets its own dedicated line/width
-        /// instead of running off the edge of a fixed-size chip.
+        /// <summary>
+        /// Stores one activity header and its wrapped callsign lines.
+        /// </summary>
         private readonly record struct ChipBlock(string Header, IReadOnlyList<string> WhoLines, Color WhoColor);
 
         private readonly List<RadioChannel> _channels;
@@ -46,26 +35,24 @@ namespace RadioRelay.Client.UI
         private readonly object _lock = new();
 
         private const int MinChipWidth = 260;
-        private const int MaxChipWidth = 520; // only truncated with an ellipsis beyond this, which should be rare
+        private const int MaxChipWidth = 520; // Truncate wider text with an ellipsis.
         private const int TextPaddingLeft = 12;
         private const int TextPaddingRight = 14;
         private const int RowHeight = 24;
         private const int ChipPadding = 8;
-        private const int ScreenMargin = 16; // distance from screen edges for the default cascade layout
+        private const int ScreenMargin = 16; // Default distance from screen edges.
         private const int DefaultGap = 8;
 
-        // Nominal slot height used only for the default (non-customized)
-        // cascade layout math -- sized to fit a radio that's
-        // simultaneously transmitting AND receiving (2 blocks x 2 lines),
-        // so the default stacking doesn't jump around as chips grow/shrink.
+        // Reserve enough default height for simultaneous TX and RX blocks.
         private const int DefaultSlotHeight = ChipPadding * 2 + 4 * RowHeight;
 
         private bool _editMode;
         private RadioChannel? _draggingChannel;
         private Point _dragOffset;
 
-        /// Fired whenever the user finishes dragging a chip to a
-        /// new position, so the host can persist it.
+        /// <summary>
+        /// Raised after a chip is moved so its position can be persisted.
+        /// </summary>
         public event Action? LayoutChanged;
 
         public TransmissionOverlayForm(List<RadioChannel> channels)
@@ -76,20 +63,17 @@ namespace RadioRelay.Client.UI
             ShowInTaskbar = false;
             TopMost = true;
             StartPosition = FormStartPosition.Manual;
-            BackColor = Color.FromArgb(1, 2, 3); // chroma-key: never used by any real drawn content
+            BackColor = Color.FromArgb(1, 2, 3); // Chroma key excluded from drawn content.
             TransparencyKey = BackColor;
             Opacity = 0.80;
             DoubleBuffered = true;
 
             var bounds = Screen.PrimaryScreen?.Bounds ?? new Rectangle(0, 0, 1920, 1080);
             Bounds = bounds;
-            Visible = true; // the form itself stays "visible" at all times; individual chips show/hide via painting
+            Visible = true; // Painting controls individual chip visibility.
         }
 
-        // WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW at creation:
-        // per-pixel alpha + chroma-key support, click-through by default, and
-        // kept out of alt-tab/taskbar. WS_EX_TRANSPARENT is toggled live via
-        // SetWindowLong when entering/exiting layout edit mode.
+        // Create a layered, click-through tool window excluded from Alt+Tab.
         protected override CreateParams CreateParams
         {
             get
@@ -117,14 +101,9 @@ namespace RadioRelay.Client.UI
         private const uint SWP_NOSIZE = 0x0001;
         private const uint SWP_NOMOVE = 0x0002;
 
-        /// Turns chip dragging on/off. While on, every radio's chip
-        /// is shown (even idle ones) so it can be positioned in advance, and
-        /// WS_EX_TRANSPARENT is dropped so this window can receive mouse
-        /// input at all -- but WndProc's WM_NCHITTEST override below still
-        /// makes every point that ISN'T over a chip pass through to
-        /// whatever's underneath (other windows, including the main app's
-        /// own "Done" button), so entering edit mode never blocks the rest
-        /// of the screen -- only the chips themselves become clickable.
+        /// <summary>
+        /// Enables chip dragging while keeping non-chip areas click-through.
+        /// </summary>
         public void SetEditMode(bool enabled)
         {
             _editMode = enabled;
@@ -169,8 +148,10 @@ namespace RadioRelay.Client.UI
             return false;
         }
 
+        /// <summary>
         /// Call when a transmission (local PTT or a received
         /// packet's start) begins. Safe to call from any thread.
+        /// </summary>
         public void ShowTransmission(
             RadioChannel channel,
             bool isLocalTransmit,
@@ -203,8 +184,10 @@ namespace RadioRelay.Client.UI
             SafeInvoke(Invalidate);
         }
 
+        /// <summary>
         /// Removes transmission content for an off radio while preserving its
         /// independently-updated presence count.
+        /// </summary>
         public void SuppressChannel(RadioChannel channel)
         {
             lock (_lock)
@@ -217,7 +200,9 @@ namespace RadioRelay.Client.UI
             SafeInvoke(Invalidate);
         }
 
+        /// <summary>
         /// Call when a transmission ends. Safe to call from any thread.
+        /// </summary>
         public void HideTransmission(
             RadioChannel channel,
             bool isLocalTransmit,
@@ -281,8 +266,10 @@ namespace RadioRelay.Client.UI
             return true;
         }
 
+        /// <summary>
         /// Updates the number of users currently subscribed to this
         /// radio's frequency/key group. Safe to call from any thread.
+        /// </summary>
         public void SetUserCount(RadioChannel channel, int userCount)
         {
             lock (_lock)
@@ -302,14 +289,13 @@ namespace RadioRelay.Client.UI
                 if (InvokeRequired) BeginInvoke(action);
                 else action();
             }
-            catch (ObjectDisposedException) { /* closing down -- ignore */ }
-            catch (InvalidOperationException) { /* handle not yet created -- ignore */ }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
         }
 
-        /// Builds the header+callsign block(s) currently active for
-        /// a channel (or, in edit mode with nothing active, a single preview
-        /// block), shared by both painting and hit-testing/sizing so what's
-        /// drawn and what's clickable/sized are always in sync.
+        /// <summary>
+        /// Builds activity blocks shared by painting, sizing, and hit testing.
+        /// </summary>
         private List<ChipBlock> GetBlocksForChannel(RadioChannel ch)
         {
             var blocks = new List<ChipBlock>();
@@ -377,12 +363,9 @@ namespace RadioRelay.Client.UI
             return new Point(x, y);
         }
 
-        /// Computes this channel's chip rectangle right now,
-        /// sizing it to the widest currently visible radio chip so the three
-        /// HUD popups stay visually consistent (falling back to a zero-size,
-        /// off-screen rect if there's nothing to show and we're not in edit
-        /// mode -- callers should check GetBlocksForChannel first if they
-        /// need to know whether anything is actually visible).
+        /// <summary>
+        /// Computes a channel chip rectangle using the shared visible-chip width.
+        /// </summary>
         private Rectangle GetChipBounds(RadioChannel channel, int index)
         {
             var blocks = GetBlocksForChannel(channel);
@@ -454,12 +437,7 @@ namespace RadioRelay.Client.UI
                 {
                     _draggingChannel = ch;
                     _dragOffset = new Point(e.X - bounds.X, e.Y - bounds.Y);
-                    // Explicit capture: once a drag starts, keep receiving
-                    // mouse move/up for this window regardless of where the
-                    // cursor is or what WM_NCHITTEST would say for that
-                    // point -- otherwise a fast drag that briefly moves
-                    // outside the (moving) chip's own bounds could lose
-                    // mouse input mid-drag.
+                    // Capture the mouse so fast drags cannot lose move or release events.
                     Capture = true;
                     break;
                 }
@@ -489,7 +467,7 @@ namespace RadioRelay.Client.UI
         {
             base.OnPaint(e);
             e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            e.Graphics.Clear(BackColor); // chroma-key color -- invisible on screen
+            e.Graphics.Clear(BackColor); // Chroma key hidden on screen.
 
             for (int i = 0; i < _channels.Count; i++)
             {
@@ -531,9 +509,11 @@ namespace RadioRelay.Client.UI
             }
         }
 
+        /// <summary>
         /// Re-asserts topmost Z-order -- occasionally needed since
         /// some full-screen exclusive games/apps can otherwise steal the
         /// top spot.
+        /// </summary>
         public void ReassertTopmost()
         {
             if (IsHandleCreated)

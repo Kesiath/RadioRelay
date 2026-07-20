@@ -5,13 +5,9 @@ using System.Windows.Forms;
 
 namespace RadioRelay.Client.UI
 {
-    /// 
-    /// Simple dark selector for compact radio-row values such as EAR routing.
-    /// This is intentionally not a native WinForms ComboBox: native ComboBox
-    /// hover/focus chrome can briefly repaint a light or outlined box before
-    /// owner-draw code gets control. This control paints a stable borderless
-    /// collapsed face and uses a dark ListBox popup for the dropdown.
-    /// 
+    /// <summary>
+    /// Draws a dark selector with a borderless face and ListBox popup.
+    /// </summary>
     public sealed class DarkComboBox : Control
     {
         private int _selectedIndex = -1;

@@ -5,9 +5,7 @@ using System.Windows.Forms;
 namespace RadioRelay.Client.UI
 {
     /// <summary>
-    /// Scroll viewport with a RadioRelay-owned vertical scrollbar. The content
-    /// is translated inside a clipped panel so no native light scrollbar leaks
-    /// into the dark UI.
+    /// Hosts clipped content with a custom dark vertical scrollbar.
     /// </summary>
     public sealed class ModernScrollHost : UserControl, IMessageFilter
     {
@@ -149,9 +147,7 @@ namespace RadioRelay.Client.UI
                     ContentWidthChanged?.Invoke(this, EventArgs.Empty);
                 }
 
-                // Recenter the last completed page immediately because moving a
-                // single panel is cheap. MainForm applies the requested width on
-                // its coalesced layout cadence instead of on every WM_SIZE.
+                // Recenter immediately while MainForm coalesces width changes.
                 RefreshScrollMetrics();
             }
             finally

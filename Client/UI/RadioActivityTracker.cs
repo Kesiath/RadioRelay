@@ -10,12 +10,9 @@ namespace RadioRelay.Client.UI
         Transmitting
     }
 
-    /// 
-    /// Tracks user-visible per-radio activity from transmission lifecycle events.
-    /// Remote receive state is keyed by stable remote client id instead of an
-    /// increment/decrement counter so duplicate starts, duplicate ends, and
-    /// near-simultaneous multi-user ends cannot leave a stale RX indicator.
-    /// 
+    /// <summary>
+    /// Tracks per-radio activity with idempotent, client-keyed lifecycle state.
+    /// </summary>
     internal sealed class RadioActivityTracker
     {
         private readonly HashSet<RadioChannel> _localTransmitChannels = new();

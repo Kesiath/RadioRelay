@@ -5,7 +5,9 @@ using System.Windows.Forms;
 
 namespace RadioRelay.Client.UI
 {
-    /// <summary>Rounded, owner-drawn button with subtle hover and press states.</summary>
+    /// <summary>
+    /// Draws a rounded button with hover and press states.
+    /// </summary>
     public class ModernButton : Button
     {
         private bool _hovered;

@@ -6,10 +6,7 @@ using System.Windows.Forms;
 namespace RadioRelay.Client.UI
 {
     /// <summary>
-    /// A plain text editor with numeric validation and a NumericUpDown-like
-    /// value API, but no native spinner/button strip. This keeps the compact
-    /// rounded field appearance consistent while preserving bounds checking
-    /// and ValueChanged notifications used by the radio client.
+    /// Provides bounded numeric text input without native spinner controls.
     /// </summary>
     public sealed class NumericTextBox : TextBox
     {
