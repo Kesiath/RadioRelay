@@ -78,6 +78,11 @@ namespace RadioRelay.Client
         public string? PassthroughDeviceId { get; set; }
         // Retained to migrate index-based passthrough settings to endpoint IDs.
         public int? PassthroughDeviceIndex { get; set; }
+        public float PassthroughVolume { get; set; } = 1.0f;
+        // Process identity is machine-local; null/empty disables transmitted ambience.
+        public string? ApplicationAmbienceExecutablePath { get; set; }
+        public string ApplicationAmbienceProcessName { get; set; } = "";
+        public float ApplicationAmbienceGain { get; set; } = 0.38f;
         public float InputGain { get; set; } = 1.0f;
         public float InputClickVolume { get; set; } = 1.0f;
         public float TalkOverWarningVolume { get; set; } = 1.0f;

@@ -11,7 +11,7 @@ namespace RadioRelay.Client.UI
         public const int MinimumWindowHeight = 560;
         public const int MaximumWindowHeight = short.MaxValue;
         public const int MaxContentWidth = 760;
-        public const int ConnectionStripHeight = 248;
+        public const int ConnectionStripHeight = 296;
         public const int SetupStripHeight = 136;
         public const int OperationsStripHeight = 92;
         public const int RadioCardHeight = 176;

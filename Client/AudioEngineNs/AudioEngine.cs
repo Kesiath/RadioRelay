@@ -18,6 +18,11 @@ namespace RadioRelay.Client.AudioEngineNs
         public AudioPacket Packet = new();
     }
 
+    public sealed class ApplicationAmbienceCaptureFailedEventArgs : EventArgs
+    {
+        public required string Message { get; init; }
+    }
+
     /// <summary>
     /// Describes a local TX or remote RX lifecycle transition.
     /// </summary>
@@ -50,6 +55,7 @@ namespace RadioRelay.Client.AudioEngineNs
         public RadioEar Ear;
         public RadioEffectProfile? Profile;
         public readonly List<short> Accumulator = new();
+        public readonly List<float> AmbienceAccumulator = new();
     }
 
     internal readonly record struct PendingRemoteFrame(
@@ -136,15 +142,13 @@ namespace RadioRelay.Client.AudioEngineNs
     {
         public const int SampleRate = 16000;
         private static readonly WaveFormat Format = new(SampleRate, 16, 1);
-        private static readonly WaveFormat PassthroughFormat =
-            WaveFormat.CreateIeeeFloatWaveFormat(PassthroughOutputSampleRate, 2);
         private const int FrameSize = OpusCodec.FrameSize; // 20 ms at 16 kHz.
         internal const int MicrophoneCaptureBufferMilliseconds = 20;
         internal const int MicTestPrebufferMilliseconds = 200;
         private const int MicTestBufferDurationMilliseconds = 500;
         internal const int PassthroughOutputSampleRate = 48000;
         internal const int PassthroughOutputLatencyMilliseconds = 20;
-        internal const int MainOutputLatencyMilliseconds = 60;
+        internal const int MainOutputLatencyMilliseconds = 150;
         internal const int MainOutputBufferCount = 3;
         private const int PassthroughBufferDurationMilliseconds = 100;
         internal const int PassthroughMaximumLiveBacklogMilliseconds = 60;
@@ -173,7 +177,8 @@ namespace RadioRelay.Client.AudioEngineNs
         private readonly Dictionary<RadioChannel, (RadioBand band, bool isIntercom, RadioEffectProfile profile)> _txProfiles = new();
         private readonly BufferedWaveProvider _systemSoundBuffer;
         private readonly BufferedWaveProvider _micTestBuffer;
-        private readonly BufferedWaveProvider _passthroughBuffer;
+        private BufferedWaveProvider _passthroughBuffer;
+        private readonly ApplicationAmbienceSource _applicationAmbience = new();
         private readonly LocalRadioPassthroughProcessor _passthroughProcessor = new();
         private readonly LocalPassthroughOutputConverter _passthroughOutputConverter = new();
         private readonly System.Collections.Concurrent.ConcurrentQueue<CapturedMicrophoneBuffer> _micCaptureQueue = new();
@@ -204,6 +209,8 @@ namespace RadioRelay.Client.AudioEngineNs
         /// Linear microphone gain applied before radio DSP and encoding.
         /// </summary>
         public float InputGain { get; set; } = 1.0f;
+        public float ApplicationAmbienceGain { get; set; } = 0.38f;
+        public float PassthroughVolume { get; set; } = 1.0f;
 
         public bool IsMicTestActive
         {
@@ -251,6 +258,7 @@ namespace RadioRelay.Client.AudioEngineNs
         /// Raised whenever a fully-encoded (and possibly encrypted) packet is ready to send.
         /// </summary>
         public event EventHandler<CapturedAudioEventArgs>? AudioCaptured;
+        public event EventHandler<ApplicationAmbienceCaptureFailedEventArgs>? ApplicationAmbienceCaptureFailed;
 
         /// <summary>
         /// Raised when local TX or remote RX becomes active or inactive.
@@ -293,12 +301,10 @@ namespace RadioRelay.Client.AudioEngineNs
             };
             _mixer.AddMixerInput(new PanningSampleProvider(_micTestBuffer.ToSampleProvider()) { Pan = 0f });
 
-            _passthroughBuffer = new BufferedWaveProvider(PassthroughFormat)
-            {
-                DiscardOnBufferOverflow = true,
-                ReadFully = true,
-                BufferDuration = TimeSpan.FromMilliseconds(PassthroughBufferDurationMilliseconds)
-            };
+            _passthroughBuffer = CreatePassthroughBuffer(PassthroughOutputSampleRate);
+            _applicationAmbience.CaptureFailed += message => SafeInvoke(
+                ApplicationAmbienceCaptureFailed,
+                new ApplicationAmbienceCaptureFailedEventArgs { Message = message });
 
             foreach (var ch in channels)
             {
@@ -400,6 +406,13 @@ namespace RadioRelay.Client.AudioEngineNs
         }
 
         /// <summary>
+        /// Selects a local application whose output is mixed quietly into active transmissions.
+        /// Null disables application ambience.
+        /// </summary>
+        public void SetApplicationAmbienceTarget(ApplicationAudioTarget? target) =>
+            _applicationAmbience.SetTarget(target);
+
+        /// <summary>
         /// Selects the playback endpoint feeding a virtual audio cable.
         /// Null disables passthrough and is the persisted/default state.
         /// </summary>
@@ -428,6 +441,9 @@ namespace RadioRelay.Client.AudioEngineNs
 
                 using var enumerator = new MMDeviceEnumerator();
                 var device = enumerator.GetDevice(deviceId);
+                int outputSampleRate = device.AudioClient.MixFormat.SampleRate;
+                _passthroughOutputConverter.SetOutputSampleRate(outputSampleRate);
+                _passthroughBuffer = CreatePassthroughBuffer(outputSampleRate);
                 var output = new WasapiOut(
                     device,
                     AudioClientShareMode.Shared,
@@ -487,6 +503,14 @@ namespace RadioRelay.Client.AudioEngineNs
             DesiredLatency = MainOutputLatencyMilliseconds,
             NumberOfBuffers = MainOutputBufferCount
         };
+
+        private static BufferedWaveProvider CreatePassthroughBuffer(int sampleRate) =>
+            new(WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, 2))
+            {
+                DiscardOnBufferOverflow = true,
+                ReadFully = true,
+                BufferDuration = TimeSpan.FromMilliseconds(PassthroughBufferDurationMilliseconds)
+            };
 
         /// <summary>
         /// Applies a radio output-channel change immediately.
@@ -719,6 +743,11 @@ namespace RadioRelay.Client.AudioEngineNs
 
             if (active)
             {
+                if (!_txState.Values.Any(tx => tx.IsActive))
+                {
+                    _applicationAmbience.ResetTransmissionBuffer();
+                    _passthroughProcessor.BeginTransmission();
+                }
                 state.IsActive = true;
                 BeginTransmitEpochLocked(channel, state);
             }
@@ -734,6 +763,7 @@ namespace RadioRelay.Client.AudioEngineNs
 
                 if (!_txState.Values.Any(tx => tx.IsActive))
                 {
+                    QueuePassthroughPcm(_passthroughProcessor.EndTransmission());
                     _passthroughProcessor.Reset();
                     _passthroughOutputConverter.Reset();
                 }
@@ -770,6 +800,7 @@ namespace RadioRelay.Client.AudioEngineNs
             if (!active)
             {
                 state.Accumulator.Clear();
+                state.AmbienceAccumulator.Clear();
                 PlayLocalSidetone(channel, SoundLibrary.TxEnd);
                 RaiseTransmissionEnded(new TransmissionEventArgs { Channel = channel, IsLocalTransmit = true, LifecycleSequence = NextTransmissionLifecycleSequence() });
             }
@@ -799,6 +830,7 @@ namespace RadioRelay.Client.AudioEngineNs
             state.Ear = channel.Ear;
             state.Profile = GetTxProfile(channel);
             state.Accumulator.Clear();
+            state.AmbienceAccumulator.Clear();
             state.Profile.ResetTransmit(state.TransmissionAudioSeed);
             _secureCodec.BeginTransmitStream(state.TransmissionId);
             _passthroughProcessor.ResetChannel(channel);
@@ -829,7 +861,11 @@ namespace RadioRelay.Client.AudioEngineNs
             int count = Math.Min(FrameSize, state.Accumulator.Count);
             state.Accumulator.CopyTo(0, frame, 0, count);
             state.Accumulator.Clear();
-            var prepared = SendFrame(channel, state, frame, emitNetwork);
+            var ambience = new float[FrameSize];
+            int ambienceCount = Math.Min(count, state.AmbienceAccumulator.Count);
+            state.AmbienceAccumulator.CopyTo(0, ambience, 0, ambienceCount);
+            state.AmbienceAccumulator.Clear();
+            var prepared = SendFrame(channel, state, frame, ambience, emitNetwork);
             QueuePassthroughFrames(new[] { CreatePassthroughFrame(channel, state, prepared.Encoded) });
             if (prepared.NetworkPacket != null)
                 RaiseAudioCaptured(new CapturedAudioEventArgs { Packet = prepared.NetworkPacket });
@@ -1051,6 +1087,10 @@ namespace RadioRelay.Client.AudioEngineNs
                 List<List<LocalRadioPassthroughFrame>>? passthroughFrames =
                     _passthroughWasapiOut == null ? null : new();
                 var networkPackets = new List<AudioPacket>();
+                bool hasActiveTransmission = _txState.Values.Any(state => state.IsActive);
+                float[] ambienceSamples = hasActiveTransmission
+                    ? _applicationAmbience.ReadSamples(sampleCount)
+                    : Array.Empty<float>();
 
                 foreach (var kvp in _txState)
                 {
@@ -1059,7 +1099,10 @@ namespace RadioRelay.Client.AudioEngineNs
                     if (!state.IsActive) continue;
 
                     for (int i = 0; i < sampleCount; i++)
+                    {
                         state.Accumulator.Add(BitConverter.ToInt16(capturedPcm, i * 2));
+                        state.AmbienceAccumulator.Add(ambienceSamples[i]);
+                    }
 
                     // Accumulate capture blocks into exact 20 ms Opus frames.
                     int frameOrdinal = 0;
@@ -1067,7 +1110,9 @@ namespace RadioRelay.Client.AudioEngineNs
                     {
                         var frame = state.Accumulator.GetRange(0, FrameSize).ToArray();
                         state.Accumulator.RemoveRange(0, FrameSize);
-                        var prepared = SendFrame(channel, state, frame);
+                        var ambience = state.AmbienceAccumulator.GetRange(0, FrameSize).ToArray();
+                        state.AmbienceAccumulator.RemoveRange(0, FrameSize);
+                        var prepared = SendFrame(channel, state, frame, ambience);
 
                         if (passthroughFrames != null)
                         {
@@ -1099,11 +1144,14 @@ namespace RadioRelay.Client.AudioEngineNs
             RadioChannel txChannel,
             TxState state,
             short[] frame,
+            float[]? ambience = null,
             bool emitNetwork = true)
         {
-            var floatSamples = new float[FrameSize];
-            for (int i = 0; i < FrameSize; i++)
-                floatSamples[i] = ApplyInputGainSoftClip(frame[i] / 32768f, InputGain);
+            var floatSamples = PrepareTransmitSamples(
+                frame,
+                ambience,
+                InputGain,
+                ApplicationAmbienceGain);
 
             var profile = state.Profile ?? throw new InvalidOperationException("Transmit epoch has no DSP profile.");
             var net = state.Net;
@@ -1151,6 +1199,30 @@ namespace RadioRelay.Client.AudioEngineNs
                 emitNetwork && state.IsNetworkEpochAdvertised ? packet : null);
         }
 
+        internal static float[] PrepareTransmitSamples(
+            short[] microphoneFrame,
+            float[]? ambienceFrame,
+            float inputGain,
+            float ambienceGain = 1f)
+        {
+            if (microphoneFrame.Length != FrameSize)
+                throw new ArgumentException($"Expected {FrameSize} microphone samples.", nameof(microphoneFrame));
+            if (ambienceFrame != null && ambienceFrame.Length != FrameSize)
+                throw new ArgumentException($"Expected {FrameSize} ambience samples.", nameof(ambienceFrame));
+
+            var output = new float[FrameSize];
+            for (int index = 0; index < FrameSize; index++)
+            {
+                float microphone = ApplyInputGainSoftClip(microphoneFrame[index] / 32768f, inputGain);
+                float ambienceSample = ApplyInputGainSoftClip(
+                    ambienceFrame?[index] ?? 0f,
+                    Math.Clamp(ambienceGain, 0f, 1f));
+                output[index] = Math.Clamp(microphone + ambienceSample, -1f, 1f);
+            }
+
+            return output;
+        }
+
         internal static void ApplyTransmitEffects(
             float[] samples,
             RadioEffectProfile profile,
@@ -1191,11 +1263,35 @@ namespace RadioRelay.Client.AudioEngineNs
             if (_passthroughWasapiOut == null || encodedFrames.Count == 0) return;
 
             var receivedStereo = _passthroughProcessor.Process(encodedFrames);
+            QueuePassthroughPcm(receivedStereo);
+        }
+
+        private void QueuePassthroughPcm(short[] receivedStereo)
+        {
+            if (_passthroughWasapiOut == null || receivedStereo.Length == 0) return;
+
             var passthroughPcm = _passthroughOutputConverter.Convert(receivedStereo);
+            ApplyPassthroughVolume(passthroughPcm, PassthroughVolume);
             lock (_passthroughBuffer)
             {
                 TrimPassthroughLiveBacklog(passthroughPcm.Length);
                 _passthroughBuffer.AddSamples(passthroughPcm, 0, passthroughPcm.Length);
+            }
+        }
+
+        internal static void ApplyPassthroughVolume(byte[] floatPcm, float volume)
+        {
+            if ((floatPcm.Length & (sizeof(float) - 1)) != 0)
+                throw new ArgumentException("Expected 32-bit float PCM.", nameof(floatPcm));
+
+            float gain = Math.Clamp(volume, 0f, RadioChannel.MaxReceiveVolume);
+            if (Math.Abs(gain - 1f) < 0.0001f) return;
+
+            for (int offset = 0; offset < floatPcm.Length; offset += sizeof(float))
+            {
+                float sample = BitConverter.ToSingle(floatPcm, offset) * gain;
+                if (gain > 1f) sample = SoftLimiterSampleProvider.Limit(sample);
+                BitConverter.TryWriteBytes(floatPcm.AsSpan(offset, sizeof(float)), sample);
             }
         }
 
@@ -2209,6 +2305,7 @@ namespace RadioRelay.Client.AudioEngineNs
             if (micProcessingThread != null && micProcessingThread != System.Threading.Thread.CurrentThread)
                 micProcessingThread.Join(TimeSpan.FromSeconds(1));
             _micCaptureSignal.Dispose();
+            _applicationAmbience.Dispose();
         }
 
     }

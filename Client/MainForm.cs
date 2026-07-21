@@ -141,11 +141,14 @@ namespace RadioRelay.Client
         private readonly DarkComboBox _inputDeviceBox = new() { DropDownWidth = 360 };
         private readonly DarkComboBox _outputDeviceBox = new() { DropDownWidth = 360 };
         private readonly DarkComboBox _passthroughDeviceBox = new() { DropDownWidth = 360 };
+        private readonly DarkComboBox _applicationAmbienceBox = new() { DropDownWidth = 520 };
+        private readonly ModernSlider _applicationAmbienceGainSlider = new() { Minimum = 0, Maximum = 100, Value = 38 };
+        private readonly ModernSlider _passthroughVolumeSlider = new() { Minimum = 0, Maximum = 300, Value = 100 };
         private readonly ModernButton _testMicButton = new() { Text = "Test Mic" };
         private readonly ModernSlider _inputGainSlider = new() { Minimum = 0, Maximum = 300, Value = 100 };
-        private readonly ModernSlider _inputClickVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
-        private readonly ModernSlider _talkOverVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
-        private readonly ModernSlider _outputClickVolSlider = new() { Minimum = 0, Maximum = 100, Value = 100 };
+        private readonly ModernSlider _inputClickVolSlider = new() { Minimum = 0, Maximum = 300, Value = 100 };
+        private readonly ModernSlider _talkOverVolSlider = new() { Minimum = 0, Maximum = 300, Value = 100 };
+        private readonly ModernSlider _outputClickVolSlider = new() { Minimum = 0, Maximum = 300, Value = 100 };
 
         private readonly ModernButton _hudLayoutButton = new() { Text = "Customize HUD" };
         private readonly ModernButton _icpBindingButton = new() { Text = "ICP Unbound" };
@@ -169,6 +172,7 @@ namespace RadioRelay.Client
         private readonly RadioActivityTracker _activityTracker = new();
         private bool _layoutInProgress;
         private bool _initialDpiSizeApplied;
+        private bool _refreshingApplicationAmbience;
 
         private readonly List<RadioRow> _radioRows = new();
 
@@ -741,7 +745,7 @@ namespace RadioRelay.Client
             {
                 Dock = DockStyle.Fill,
                 Margin = new Padding(0),
-                Padding = new Padding(2, 3, 2, 0),
+                Padding = new Padding(6, 3, 6, 0),
                 BackColor = Color.Transparent
             };
             sliderHost.Controls.Add(slider);
@@ -856,54 +860,48 @@ namespace RadioRelay.Client
             return row;
         }
 
-        private static TableLayoutPanel CreateTopSliderRow(
-            ModernSlider inputGain,
-            ModernSlider txClick,
-            ModernSlider rxClick,
-            ModernSlider talkover)
+        private static TableLayoutPanel CreateApplicationAmbienceRow(DarkComboBox applicationBox)
         {
             var row = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 7,
+                ColumnCount = 1,
                 RowCount = 1,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            for (int i = 0; i < 4; i++)
-            {
-                row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 25));
-                if (i < 3) row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
-            }
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
 
-            row.Controls.Add(CreateSliderCell("Input gain", inputGain), 0, 0);
-            row.Controls.Add(CreateSliderCell("TX click", txClick), 2, 0);
-            row.Controls.Add(CreateSliderCell("RX click", rxClick), 4, 0);
-            row.Controls.Add(CreateSliderCell("Talkover", talkover), 6, 0);
+            row.Controls.Add(CreateFillField("Application ambience", applicationBox), 0, 0);
             return row;
         }
 
-        private static TableLayoutPanel CreateTopSliderPairRow(
-            ModernSlider leftSlider,
-            ModernSlider rightSlider,
-            string leftLabel,
-            string rightLabel)
+        private static TableLayoutPanel CreateTopSliderTripleRow(
+            ModernSlider firstSlider,
+            ModernSlider secondSlider,
+            ModernSlider thirdSlider,
+            string firstLabel,
+            string secondLabel,
+            string thirdLabel)
         {
             var row = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 3,
+                ColumnCount = 5,
                 RowCount = 1,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
             row.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap + 8));
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-            row.Controls.Add(CreateSliderCell(leftLabel, leftSlider), 0, 0);
-            row.Controls.Add(CreateSliderCell(rightLabel, rightSlider), 2, 0);
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap + 8));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.334f));
+            row.Controls.Add(CreateSliderCell(firstLabel, firstSlider), 0, 0);
+            row.Controls.Add(CreateSliderCell(secondLabel, secondSlider), 2, 0);
+            row.Controls.Add(CreateSliderCell(thirdLabel, thirdSlider), 4, 0);
             return row;
         }
 
@@ -1242,6 +1240,7 @@ namespace RadioRelay.Client
             StyleField(_inputDeviceBox);
             StyleField(_outputDeviceBox);
             StyleField(_passthroughDeviceBox);
+            StyleField(_applicationAmbienceBox);
             StyleButton(_testMicButton);
             _hudLayoutButton.Text = "Customize HUD";
             StyleButton(_hudLayoutButton);
@@ -1259,6 +1258,7 @@ namespace RadioRelay.Client
             _passthroughDeviceBox.Items.Add(new EndpointItem(null, "Disabled"));
             foreach (var (id, name) in AudioDeviceEnumerator.GetOutputEndpoints())
                 _passthroughDeviceBox.Items.Add(new EndpointItem(id, name));
+            RefreshApplicationAmbienceItems();
 
             // Connection, identity, devices, and audio levels.
             var topCard = new ModernCard
@@ -1270,9 +1270,10 @@ namespace RadioRelay.Client
                 CornerRadius = 12,
                 Padding = new Padding(CardPadding, 10, CardPadding, 10),
                 ColumnCount = 1,
-                RowCount = 5
+                RowCount = 6
             };
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+            topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             topCard.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
@@ -1285,8 +1286,21 @@ namespace RadioRelay.Client
                 _testMicButton,
                 _outputDeviceBox,
                 _passthroughDeviceBox), 0, 2);
-            topCard.Controls.Add(CreateTopSliderPairRow(_inputGainSlider, _inputClickVolSlider, "Input gain", "TX click"), 0, 3);
-            topCard.Controls.Add(CreateTopSliderPairRow(_outputClickVolSlider, _talkOverVolSlider, "RX click", "Talkover"), 0, 4);
+            topCard.Controls.Add(CreateApplicationAmbienceRow(_applicationAmbienceBox), 0, 3);
+            topCard.Controls.Add(CreateTopSliderTripleRow(
+                _inputGainSlider,
+                _applicationAmbienceGainSlider,
+                _passthroughVolumeSlider,
+                "Input gain",
+                "Ambience volume",
+                "Passthrough volume"), 0, 4);
+            topCard.Controls.Add(CreateTopSliderTripleRow(
+                _inputClickVolSlider,
+                _outputClickVolSlider,
+                _talkOverVolSlider,
+                "TX click",
+                "RX click",
+                "Talkover"), 0, 5);
             AddPageRow(topCard, 10);
 
             // Global controls.
@@ -1648,6 +1662,21 @@ namespace RadioRelay.Client
             };
             _testMicButton.Click += (_, _) => SetMicTestActive(_audioEngine?.IsMicTestActive != true);
             _passthroughDeviceBox.SelectedIndexChanged += (_, _) => ApplySelectedPassthroughDevice();
+            _applicationAmbienceBox.DropDownOpening += (_, _) => RefreshApplicationAmbienceItems();
+            _applicationAmbienceBox.SelectedIndexChanged += (_, _) =>
+            {
+                if (!_refreshingApplicationAmbience) ApplySelectedApplicationAmbience();
+            };
+            _applicationAmbienceGainSlider.ValueChanged += (_, _) =>
+            {
+                if (_audioEngine != null)
+                    _audioEngine.ApplicationAmbienceGain = _applicationAmbienceGainSlider.Value / 100f;
+            };
+            _passthroughVolumeSlider.ValueChanged += (_, _) =>
+            {
+                if (_audioEngine != null)
+                    _audioEngine.PassthroughVolume = _passthroughVolumeSlider.Value / 100f;
+            };
             _inputGainSlider.ValueChanged += (_, _) =>
             {
                 if (_audioEngine != null) _audioEngine.InputGain = _inputGainSlider.Value / 100f;
@@ -1711,6 +1740,8 @@ namespace RadioRelay.Client
 
             _audioEngine = new AudioEngine(_channels, clientId: _identity) { Callsign = _callsignBox.Text };
             _audioEngine.AudioCaptured += (_, e) => _relayClient?.SendAudio(e.Packet);
+            _audioEngine.ApplicationAmbienceCaptureFailed += (_, e) =>
+                LogSafe($"Application ambience capture failed: {e.Message}");
             _audioEngine.TransmissionStarted += (_, e) => OnTransmissionStarted(e);
             _audioEngine.TransmissionEnded += (_, e) => OnTransmissionEnded(e);
 
@@ -1820,13 +1851,34 @@ namespace RadioRelay.Client
             _audioEngine?.SetInputDevice(_settings.InputDeviceIndex);
             _audioEngine?.SetOutputDevice(_settings.OutputDeviceIndex);
             ApplySelectedPassthroughDevice();
+            RefreshApplicationAmbienceItems();
+            ApplySelectedApplicationAmbience();
 
+            _applicationAmbienceGainSlider.Value = Math.Clamp(
+                (int)Math.Round(_settings.ApplicationAmbienceGain * 100),
+                _applicationAmbienceGainSlider.Minimum,
+                _applicationAmbienceGainSlider.Maximum);
+            _passthroughVolumeSlider.Value = Math.Clamp(
+                (int)Math.Round(_settings.PassthroughVolume * 100),
+                _passthroughVolumeSlider.Minimum,
+                _passthroughVolumeSlider.Maximum);
             _inputGainSlider.Value = Math.Clamp((int)Math.Round(_settings.InputGain * 100), _inputGainSlider.Minimum, _inputGainSlider.Maximum);
-            _inputClickVolSlider.Value = Math.Clamp((int)Math.Round(_settings.InputClickVolume * 100), 0, 100);
-            _talkOverVolSlider.Value = Math.Clamp((int)Math.Round(_settings.TalkOverWarningVolume * 100), 0, 100);
-            _outputClickVolSlider.Value = Math.Clamp((int)Math.Round(_settings.OutputClickVolume * 100), 0, 100);
+            _inputClickVolSlider.Value = Math.Clamp(
+                (int)Math.Round(_settings.InputClickVolume * 100),
+                _inputClickVolSlider.Minimum,
+                _inputClickVolSlider.Maximum);
+            _talkOverVolSlider.Value = Math.Clamp(
+                (int)Math.Round(_settings.TalkOverWarningVolume * 100),
+                _talkOverVolSlider.Minimum,
+                _talkOverVolSlider.Maximum);
+            _outputClickVolSlider.Value = Math.Clamp(
+                (int)Math.Round(_settings.OutputClickVolume * 100),
+                _outputClickVolSlider.Minimum,
+                _outputClickVolSlider.Maximum);
             if (_audioEngine != null)
             {
+                _audioEngine.ApplicationAmbienceGain = _applicationAmbienceGainSlider.Value / 100f;
+                _audioEngine.PassthroughVolume = _passthroughVolumeSlider.Value / 100f;
                 _audioEngine.InputGain = _inputGainSlider.Value / 100f;
                 _audioEngine.InputClickVolume = _inputClickVolSlider.Value / 100f;
                 _audioEngine.TalkOverWarningVolume = _talkOverVolSlider.Value / 100f;
@@ -1874,6 +1926,67 @@ namespace RadioRelay.Client
                 }
             }
             if (box.Items.Count > 0) box.SelectedIndex = 0;
+        }
+
+        private void RefreshApplicationAmbienceItems()
+        {
+            var selectedTarget = (_applicationAmbienceBox.SelectedItem as ApplicationItem)?.Target;
+            string? desiredPath = selectedTarget?.ExecutablePath ?? _settings.ApplicationAmbienceExecutablePath;
+            string desiredProcessName = selectedTarget?.ProcessName ?? _settings.ApplicationAmbienceProcessName;
+
+            _refreshingApplicationAmbience = true;
+            try
+            {
+                _applicationAmbienceBox.Items.Clear();
+                var disabled = new ApplicationItem(null, "Disabled");
+                _applicationAmbienceBox.Items.Add(disabled);
+
+                if (!ApplicationAudioEnumerator.IsProcessLoopbackSupported)
+                {
+                    _applicationAmbienceBox.Enabled = false;
+                    _applicationAmbienceBox.Items.Add(new ApplicationItem(
+                        null,
+                        "Unavailable on this Windows version"));
+                    _applicationAmbienceBox.SelectedItem = disabled;
+                    return;
+                }
+
+                _applicationAmbienceBox.Enabled = true;
+                ApplicationItem? desiredItem = null;
+                foreach (var target in ApplicationAudioEnumerator.GetRunningApplications())
+                {
+                    var item = new ApplicationItem(target, target.DisplayName);
+                    _applicationAmbienceBox.Items.Add(item);
+                    if (ApplicationAudioEnumerator.Matches(target, desiredPath, desiredProcessName))
+                        desiredItem ??= item;
+                }
+
+                if (desiredItem == null && !string.IsNullOrWhiteSpace(desiredProcessName))
+                {
+                    string waitingName = $"Waiting for {desiredProcessName}";
+                    var waitingTarget = new ApplicationAudioTarget(
+                        0,
+                        desiredProcessName,
+                        desiredPath,
+                        waitingName);
+                    desiredItem = new ApplicationItem(waitingTarget, waitingName);
+                    _applicationAmbienceBox.Items.Add(desiredItem);
+                }
+
+                _applicationAmbienceBox.SelectedItem = desiredItem ?? disabled;
+            }
+            finally
+            {
+                _refreshingApplicationAmbience = false;
+            }
+        }
+
+        private void ApplySelectedApplicationAmbience()
+        {
+            var target = (_applicationAmbienceBox.SelectedItem as ApplicationItem)?.Target;
+            _settings.ApplicationAmbienceExecutablePath = target?.ExecutablePath;
+            _settings.ApplicationAmbienceProcessName = target?.ProcessName ?? "";
+            _audioEngine?.SetApplicationAmbienceTarget(target);
         }
 
         private void ApplySelectedPassthroughDevice()
@@ -1967,6 +2080,11 @@ namespace RadioRelay.Client
                 ? passthroughItem.Id
                 : null;
             _settings.PassthroughDeviceIndex = null;
+            var ambienceTarget = (_applicationAmbienceBox.SelectedItem as ApplicationItem)?.Target;
+            _settings.ApplicationAmbienceExecutablePath = ambienceTarget?.ExecutablePath;
+            _settings.ApplicationAmbienceProcessName = ambienceTarget?.ProcessName ?? "";
+            _settings.ApplicationAmbienceGain = _applicationAmbienceGainSlider.Value / 100f;
+            _settings.PassthroughVolume = _passthroughVolumeSlider.Value / 100f;
             _settings.InputGain = _inputGainSlider.Value / 100f;
             _settings.InputClickVolume = _inputClickVolSlider.Value / 100f;
             _settings.TalkOverWarningVolume = _talkOverVolSlider.Value / 100f;
@@ -2657,6 +2775,20 @@ namespace RadioRelay.Client
             public readonly int Index;
             public readonly string Name;
             public DeviceItem(int index, string name) { Index = index; Name = name; }
+            public override string ToString() => Name;
+        }
+
+        private sealed class ApplicationItem
+        {
+            public ApplicationAudioTarget? Target { get; }
+            private string Name { get; }
+
+            public ApplicationItem(ApplicationAudioTarget? target, string name)
+            {
+                Target = target;
+                Name = name;
+            }
+
             public override string ToString() => Name;
         }
 

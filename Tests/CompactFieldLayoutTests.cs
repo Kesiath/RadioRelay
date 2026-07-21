@@ -139,6 +139,110 @@ public class CompactFieldLayoutTests
     }
 
     [Fact]
+    public void Application_ambience_source_uses_the_full_settings_row()
+    {
+        using var application = new DarkComboBox();
+        var method = typeof(MainForm).GetMethod(
+            "CreateApplicationAmbienceRow",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
+            null,
+            new object[] { application }));
+
+        row.Size = new Size(724, 48);
+        row.CreateControl();
+        row.PerformLayout();
+
+        var field = row.GetControlFromPosition(0, 0);
+        Assert.NotNull(field);
+        Assert.Single(row.Controls.Cast<Control>());
+        Assert.Equal(row.DisplayRectangle.Width, field!.Width);
+    }
+
+    [Fact]
+    public void Settings_slider_row_gives_long_labels_and_values_room()
+    {
+        using var input = new ModernSlider { Minimum = 0, Maximum = 300, Value = 150 };
+        using var ambience = new ModernSlider { Minimum = 0, Maximum = 100, Value = 38 };
+        using var passthrough = new ModernSlider { Minimum = 0, Maximum = 300, Value = 100 };
+        var method = typeof(MainForm).GetMethod(
+            "CreateTopSliderTripleRow",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
+            null,
+            new object[]
+            {
+                input,
+                ambience,
+                passthrough,
+                "Input gain",
+                "Ambience volume",
+                "Passthrough volume"
+            }));
+
+        row.Size = new Size(724, 48);
+        row.CreateControl();
+        row.PerformLayout();
+
+        var sliders = new[] { input, ambience, passthrough };
+        int sliderIndex = 0;
+        foreach (int column in new[] { 0, 2, 4 })
+        {
+            var cell = row.GetControlFromPosition(column, 0);
+            Assert.NotNull(cell);
+            Assert.InRange(cell!.Width, 210, 240);
+            Assert.True(cell.Right <= row.DisplayRectangle.Right);
+
+            cell.PerformLayout();
+            var header = Assert.IsType<TableLayoutPanel>(
+                ((TableLayoutPanel)cell).GetControlFromPosition(0, 0));
+            header.PerformLayout();
+            var caption = header.GetControlFromPosition(0, 0);
+            var value = header.GetControlFromPosition(1, 0);
+            Assert.NotNull(caption);
+            Assert.NotNull(value);
+            Assert.True(caption!.Right <= value!.Left);
+            Assert.True(value.Right <= header.DisplayRectangle.Right);
+
+            var host = Assert.IsType<Panel>(
+                ((TableLayoutPanel)cell).GetControlFromPosition(0, 1));
+            host.PerformLayout();
+            var slider = sliders[sliderIndex++];
+            Assert.True(slider.Left >= host.Padding.Left);
+            Assert.True(slider.Right <= host.ClientSize.Width - host.Padding.Right);
+        }
+        Assert.Equal("Ambience volume", ambience.AccessibleName);
+        Assert.Equal("Passthrough volume", passthrough.AccessibleName);
+    }
+
+    [Fact]
+    public void Cue_slider_row_supports_three_hundred_percent_values()
+    {
+        using var tx = new ModernSlider { Minimum = 0, Maximum = 300, Value = 300 };
+        using var rx = new ModernSlider { Minimum = 0, Maximum = 300, Value = 300 };
+        using var talkover = new ModernSlider { Minimum = 0, Maximum = 300, Value = 300 };
+        var method = typeof(MainForm).GetMethod(
+            "CreateTopSliderTripleRow",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
+            null,
+            new object[] { tx, rx, talkover, "TX click", "RX click", "Talkover" }));
+
+        row.Size = new Size(724, 48);
+        row.CreateControl();
+        row.PerformLayout();
+
+        foreach (var slider in new[] { tx, rx, talkover })
+        {
+            Assert.Equal(300, slider.Maximum);
+            Assert.Equal(300, slider.Value);
+        }
+    }
+
+    [Fact]
     public void Radio_header_moves_metadata_left_and_distributes_it_evenly()
     {
         var method = typeof(MainForm).GetMethod("CreateRadioHeaderRow", BindingFlags.Static | BindingFlags.NonPublic);
