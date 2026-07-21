@@ -118,6 +118,7 @@ namespace RadioRelay.Client.UI
                 int selected = number;
                 var button = CreateButton(number.ToString());
                 button.Font = new Font(Theme.MonoFont.FontFamily, 14f, FontStyle.Bold);
+                button.SizeChanged += (_, _) => FitChannelButtonText(button);
                 button.Click += (_, _) => SelectChannel(selected);
                 _channelButtons.Add(button);
                 keypad.Controls.Add(button, (number - 1) % 3, (number - 1) / 3);
@@ -336,6 +337,16 @@ namespace RadioRelay.Client.UI
             }
         }
 
+        public void RefreshChannelNames()
+        {
+            for (int i = 0; i < _channelButtons.Count; i++)
+            {
+                _channelButtons[i].Text = _selectedRadio?.GetChannelDisplayName(i + 1) ?? (i + 1).ToString();
+                FitChannelButtonText(_channelButtons[i]);
+            }
+            if (_selectedRadio != null) UpdateVisualState();
+        }
+
         private static void FitButtonText(Button button)
         {
             float size = Theme.ButtonFont.Size;
@@ -355,10 +366,28 @@ namespace RadioRelay.Client.UI
             if (!ReferenceEquals(oldFont, Theme.ButtonFont) && !ReferenceEquals(oldFont, button.Font)) oldFont.Dispose();
         }
 
+        private static void FitChannelButtonText(Button button)
+        {
+            float size = 14f;
+            int availableWidth = Math.Max(1, button.ClientSize.Width - button.Padding.Horizontal - 4);
+            while (size > 6.5f)
+            {
+                using var candidate = new Font(Theme.MonoFont.FontFamily, size, FontStyle.Bold);
+                if (TextRenderer.MeasureText(button.Text, candidate, Size.Empty, TextFormatFlags.NoPadding).Width <= availableWidth)
+                    break;
+                size -= 0.5f;
+            }
+
+            var oldFont = button.Font;
+            button.Font = new Font(Theme.MonoFont.FontFamily, size, FontStyle.Bold);
+            if (!ReferenceEquals(oldFont, Theme.MonoFont) && !ReferenceEquals(oldFont, button.Font)) oldFont.Dispose();
+        }
+
         private void SelectRadio(RadioChannel channel)
         {
             _selectedRadio = channel;
             _pendingChannel = null;
+            RefreshChannelNames();
             _pendingVolume = Math.Clamp(
                 (int)Math.Round(channel.Volume * 100f),
                 0,
@@ -402,7 +431,7 @@ namespace RadioRelay.Client.UI
             int volume = _pendingVolume.Value;
             ChangeConfirmed?.Invoke(radio, channel, volume);
             _readout.Text = channel.HasValue
-                ? $"{radio.DisplayName}  CH {channel.Value}  VOL {volume}%  SET"
+                ? $"{radio.DisplayName}  CH {radio.GetChannelDisplayName(channel.Value)}  VOL {volume}%  SET"
                 : $"{radio.DisplayName}  VOL {volume}%  SET";
             _readout.ForeColor = Theme.AccentGreen;
             _selectedRadio = null;
@@ -410,6 +439,7 @@ namespace RadioRelay.Client.UI
             _pendingVolume = null;
             _initialVolume = null;
             _volumeSlider.Enabled = false;
+            RefreshChannelNames();
             UpdateButtonColors();
         }
 
@@ -422,6 +452,7 @@ namespace RadioRelay.Client.UI
             _volumeSlider.Enabled = false;
             _volumeValue.Text = "--";
             _volumeValue.ForeColor = Theme.MutedText;
+            RefreshChannelNames();
             _readout.Text = _editMode ? "DRAG HERE TO POSITION ICP" : "SELECT RADIO";
             _readout.ForeColor = _editMode ? Theme.AccentBlue : Theme.HeaderText;
             UpdateButtonColors();
@@ -432,7 +463,7 @@ namespace RadioRelay.Client.UI
             _readout.Text = _selectedRadio == null
                 ? "SELECT RADIO"
                 : _pendingChannel.HasValue
-                    ? $"{_selectedRadio.DisplayName}  >  CH {_pendingChannel.Value}  VOL {_pendingVolume ?? 0}%"
+                    ? $"{_selectedRadio.DisplayName}  >  CH {_selectedRadio.GetChannelDisplayName(_pendingChannel.Value)}  VOL {_pendingVolume ?? 0}%"
                     : $"{_selectedRadio.DisplayName}  >  SELECT CHANNEL  VOL {_pendingVolume ?? 0}%";
             _readout.ForeColor = Theme.Text;
             UpdateButtonColors();

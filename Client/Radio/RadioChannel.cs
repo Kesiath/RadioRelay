@@ -5,6 +5,7 @@ namespace RadioRelay.Client.Radio
     public sealed class RadioPreset
     {
         public int Channel { get; init; }
+        public string Name { get; set; } = "";
         public float Frequency { get; set; }
         public string Passcode { get; set; } = "";
     }
@@ -31,6 +32,7 @@ namespace RadioRelay.Client.Radio
         public float Frequency { get; set; } = 251.000f;
         public float DefaultFrequency { get; private set; } = 251.000f;
         public int SelectedChannel { get; private set; } = 1;
+        public string SelectedChannelName => _presets[SelectedChannel - 1].Name;
         public float Volume
         {
             get => _volume;
@@ -73,6 +75,7 @@ namespace RadioRelay.Client.Radio
                 _presets[index] = new RadioPreset
                 {
                     Channel = index + 1,
+                    Name = "",
                     Frequency = DefaultFrequency,
                     Passcode = ""
                 };
@@ -84,6 +87,7 @@ namespace RadioRelay.Client.Radio
                 foreach (var preset in presets)
                 {
                     if (preset.Channel < 1 || preset.Channel > PresetCount) continue;
+                    _presets[preset.Channel - 1].Name = preset.Name ?? "";
                     _presets[preset.Channel - 1].Frequency = NormalizeFrequency(preset.Frequency);
                     _presets[preset.Channel - 1].Passcode = preset.Passcode ?? "";
                     loadedPreset = true;
@@ -119,6 +123,18 @@ namespace RadioRelay.Client.Radio
             _presets[SelectedChannel - 1].Passcode = Passcode;
         }
 
+        public void SetActiveChannelName(string? name)
+        {
+            _presets[SelectedChannel - 1].Name = name ?? "";
+        }
+
+        public string GetChannelDisplayName(int channel)
+        {
+            var channelNumber = Math.Clamp(channel, 1, PresetCount);
+            var name = _presets[channelNumber - 1].Name.Trim();
+            return string.IsNullOrEmpty(name) ? channelNumber.ToString() : $"{channelNumber} — {name}";
+        }
+
         public IReadOnlyList<RadioPreset> GetPresetSnapshot()
         {
             SaveSelectedPreset();
@@ -126,6 +142,7 @@ namespace RadioRelay.Client.Radio
                 .Select(preset => new RadioPreset
                 {
                     Channel = preset.Channel,
+                    Name = preset.Name,
                     Frequency = preset.Frequency,
                     Passcode = preset.Passcode
                 })
