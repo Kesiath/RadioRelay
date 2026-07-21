@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Windows.Forms;
+using RadioRelay.Client.Radio;
 using RadioRelay.Client.UI;
 
 namespace RadioRelay.Tests;
@@ -59,5 +60,29 @@ public class IcpOverlayWindowTests
         var slider = Assert.IsType<ModernSlider>(sliderField!.GetValue(overlay));
         Assert.False(slider.FocusOnPointerInteraction);
         Assert.False(slider.TabStop);
+    }
+
+    [Fact]
+    public void Icp_channel_buttons_show_the_selected_radios_channel_names()
+    {
+        var radio = new RadioChannel();
+        radio.SetActiveChannelName("Guard");
+        using var overlay = new IcpOverlayForm([radio]);
+        var selectRadio = typeof(IcpOverlayForm).GetMethod("SelectRadio", BindingFlags.Instance | BindingFlags.NonPublic);
+        var selectChannel = typeof(IcpOverlayForm).GetMethod("SelectChannel", BindingFlags.Instance | BindingFlags.NonPublic);
+        var confirm = typeof(IcpOverlayForm).GetMethod("Confirm", BindingFlags.Instance | BindingFlags.NonPublic);
+        var channelButtonsField = typeof(IcpOverlayForm).GetField("_channelButtons", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        selectRadio!.Invoke(overlay, [radio]);
+
+        var buttons = Assert.IsType<List<ModernButton>>(channelButtonsField!.GetValue(overlay));
+        Assert.Equal("1 — Guard", buttons[0].Text);
+        Assert.Equal("2", buttons[1].Text);
+
+        selectChannel!.Invoke(overlay, [1]);
+        confirm!.Invoke(overlay, null);
+
+        Assert.Equal("1", buttons[0].Text);
+        Assert.Equal("2", buttons[1].Text);
     }
 }

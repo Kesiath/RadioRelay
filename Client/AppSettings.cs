@@ -24,6 +24,7 @@ namespace RadioRelay.Client
     public class RadioPresetSettings
     {
         public int Channel { get; set; }
+        public string Name { get; set; } = "";
         public float Frequency { get; set; }
         public string Passcode { get; set; } = "";
     }
@@ -195,6 +196,7 @@ namespace RadioRelay.Client
                     .Select(channel => new RadioPresetSettings
                     {
                         Channel = channel.Channel,
+                        Name = channel.Name ?? "",
                         Frequency = channel.Frequency,
                         Passcode = channel.Passcode ?? ""
                     })
@@ -207,6 +209,7 @@ namespace RadioRelay.Client
                 new()
                 {
                     Channel = 1,
+                    Name = "",
                     Frequency = imported.Frequency,
                     Passcode = imported.Passcode ?? ""
                 }
@@ -233,6 +236,7 @@ namespace RadioRelay.Client
                 Channels = OperationalChannelsFrom(r).ConvertAll(channel => new OperationalExportPresetSettings
                 {
                     Channel = channel.Channel,
+                    Name = channel.Name,
                     Frequency = channel.Frequency,
                     Passcode = channel.Passcode
                 })
@@ -259,6 +263,7 @@ namespace RadioRelay.Client
         private sealed class OperationalExportPresetSettings
         {
             public int Channel { get; set; }
+            public string Name { get; set; } = "";
             public float Frequency { get; set; }
             public string Passcode { get; set; } = "";
         }

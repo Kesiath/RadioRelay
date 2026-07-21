@@ -21,6 +21,7 @@ namespace RadioRelay.Client
             public required RadioChannel Channel;
             public required TextBox NameBox;
             public required DarkComboBox ChannelBox;
+            public required TextBox ChannelNameBox;
             public required NumericTextBox Freq;
             public required ModernSlider Vol;
             public required DarkComboBox Ear;
@@ -258,6 +259,7 @@ namespace RadioRelay.Client
                 (saved.Channels ?? new List<RadioPresetSettings>()).Select(channel => new RadioPreset
                 {
                     Channel = channel.Channel,
+                    Name = channel.Name,
                     Frequency = channel.Frequency,
                     Passcode = channel.Passcode
                 }),
@@ -1101,6 +1103,7 @@ namespace RadioRelay.Client
 
         private static TableLayoutPanel CreatePttRow(
             DarkComboBox channelBox,
+            TextBox channelNameBox,
             Label pttPrimaryLabel,
             Button pttPrimaryButton,
             Label pttSecondaryLabel,
@@ -1111,12 +1114,14 @@ namespace RadioRelay.Client
             var row = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 7,
+                ColumnCount = 9,
                 RowCount = 1,
                 Margin = new Padding(0),
                 Padding = new Padding(0)
             };
-            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 86));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 128));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap));
+            row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 142));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, Gap + 8));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 74));
             row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
@@ -1145,14 +1150,39 @@ namespace RadioRelay.Client
                 label.Margin = new Padding(8, FieldCaptionHeight, 6, 0);
             }
 
-            row.Controls.Add(CreateCompactField("Channel", channelBox, 86), 0, 0);
+            row.Controls.Add(CreateCompactField("Channel", channelBox, 128), 0, 0);
             row.Controls.Add(new Panel { Dock = DockStyle.Fill }, 1, 0);
-            row.Controls.Add(pttPrimaryButton, 2, 0);
-            row.Controls.Add(pttPrimaryLabel, 3, 0);
-            row.Controls.Add(new Panel { Dock = DockStyle.Fill }, 4, 0);
-            row.Controls.Add(pttSecondaryButton, 5, 0);
-            row.Controls.Add(pttSecondaryLabel, 6, 0);
+            row.Controls.Add(CreateCompactField("Channel Name", channelNameBox, 142), 2, 0);
+            row.Controls.Add(new Panel { Dock = DockStyle.Fill }, 3, 0);
+            row.Controls.Add(pttPrimaryButton, 4, 0);
+            row.Controls.Add(pttPrimaryLabel, 5, 0);
+            row.Controls.Add(new Panel { Dock = DockStyle.Fill }, 6, 0);
+            row.Controls.Add(pttSecondaryButton, 7, 0);
+            row.Controls.Add(pttSecondaryLabel, 8, 0);
             return row;
+        }
+
+        private static void PopulateChannelSelector(DarkComboBox channelBox, RadioChannel channel)
+        {
+            channelBox.Items.Clear();
+            for (var channelNumber = 1; channelNumber <= RadioChannel.PresetCount; channelNumber++)
+                channelBox.Items.Add(channel.GetChannelDisplayName(channelNumber));
+            channelBox.SelectedIndex = -1;
+            channelBox.SelectedIndex = channel.SelectedChannel - 1;
+        }
+
+        private static void RefreshChannelSelector(RadioRow row)
+        {
+            var wasApplyingPreset = row.ApplyingPreset;
+            row.ApplyingPreset = true;
+            try
+            {
+                PopulateChannelSelector(row.ChannelBox, row.Channel);
+            }
+            finally
+            {
+                row.ApplyingPreset = wasApplyingPreset;
+            }
         }
 
         private static TableLayoutPanel CreateHudField(Button colorButton)
@@ -1354,11 +1384,18 @@ namespace RadioRelay.Client
                 };
                 StyleField(freq);
 
-                var channelBox = new DarkComboBox { Width = 86, DropDownWidth = 86 };
+                var channelBox = new DarkComboBox { Width = 128, DropDownWidth = 220 };
                 StyleField(channelBox);
-                for (var channelNumber = 1; channelNumber <= RadioChannel.PresetCount; channelNumber++)
-                    channelBox.Items.Add(channelNumber);
-                channelBox.SelectedItem = ch.SelectedChannel;
+                PopulateChannelSelector(channelBox, ch);
+
+                var channelNameBox = new TextBox
+                {
+                    Width = 142,
+                    Text = ch.SelectedChannelName,
+                    MaxLength = 24,
+                    AccessibleName = $"{ch.Name} channel name"
+                };
+                StyleField(channelNameBox);
 
                 var vol = new ModernSlider
                 {
@@ -1416,13 +1453,14 @@ namespace RadioRelay.Client
                 var pttSecondaryLabel = CreateLabel("Unbound", muted: true);
                 pttSecondaryLabel.AutoSize = false;
 
-                body.Controls.Add(CreatePttRow(channelBox, pttPrimaryLabel, pttPrimaryButton, pttSecondaryLabel, pttSecondaryButton), 0, 2);
+                body.Controls.Add(CreatePttRow(channelBox, channelNameBox, pttPrimaryLabel, pttPrimaryButton, pttSecondaryLabel, pttSecondaryButton), 0, 2);
 
                 _radioRows.Add(new RadioRow
                 {
                     Channel = ch,
                     NameBox = nameBox,
                     ChannelBox = channelBox,
+                    ChannelNameBox = channelNameBox,
                     Freq = freq,
                     Vol = vol,
                     Ear = ear,
@@ -1587,8 +1625,15 @@ namespace RadioRelay.Client
                 };
                 localRow.ChannelBox.SelectedIndexChanged += (_, _) =>
                 {
-                    if (localRow.ApplyingPreset || localRow.ChannelBox.SelectedItem is not int channelNumber) return;
-                    ApplyRadioChannelSelection(localRow, channelNumber);
+                    if (localRow.ApplyingPreset || localRow.ChannelBox.SelectedIndex < 0) return;
+                    ApplyRadioChannelSelection(localRow, localRow.ChannelBox.SelectedIndex + 1);
+                };
+                localRow.ChannelNameBox.TextChanged += (_, _) =>
+                {
+                    if (localRow.ApplyingPreset) return;
+                    localRow.Channel.SetActiveChannelName(localRow.ChannelNameBox.Text);
+                    RefreshChannelSelector(localRow);
+                    _icpOverlay.RefreshChannelNames();
                 };
                 localRow.Vol.ValueChanged += (_, _) =>
                 {
@@ -1898,6 +1943,7 @@ namespace RadioRelay.Client
             {
                 row.NameBox.Enabled = state.CanEditName;
                 row.ChannelBox.Enabled = state.CanEditFrequency;
+                row.ChannelNameBox.Enabled = state.CanEditName;
                 row.Freq.Enabled = state.CanEditFrequency;
                 row.Passcode.Enabled = state.CanEditPasscode;
                 row.PttPrimaryButton.Enabled = state.CanChangePttBinding;
@@ -2111,6 +2157,7 @@ namespace RadioRelay.Client
                     Channels = presets.Select(preset => new RadioPresetSettings
                     {
                         Channel = preset.Channel,
+                        Name = preset.Name,
                         Frequency = preset.Frequency,
                         Passcode = preset.Passcode
                     }).ToList(),
@@ -2205,7 +2252,8 @@ namespace RadioRelay.Client
                 try
                 {
                     row.NameBox.Text = row.Channel.DisplayName;
-                    row.ChannelBox.SelectedItem = row.Channel.SelectedChannel;
+                    PopulateChannelSelector(row.ChannelBox, row.Channel);
+                    row.ChannelNameBox.Text = row.Channel.SelectedChannelName;
                     row.Freq.Value = (decimal)Math.Clamp(row.Channel.Frequency, (float)row.Freq.Minimum, (float)row.Freq.Maximum);
                     row.Vol.Value = Math.Clamp((int)Math.Round(row.Channel.Volume * 100), row.Vol.Minimum, row.Vol.Maximum);
                     row.VolumeValueLabel.Text = $"{row.Vol.Value}%";
@@ -2406,7 +2454,8 @@ namespace RadioRelay.Client
             try
             {
                 row.Channel.SelectChannel(channelNumber);
-                row.ChannelBox.SelectedItem = channelNumber;
+                PopulateChannelSelector(row.ChannelBox, row.Channel);
+                row.ChannelNameBox.Text = row.Channel.SelectedChannelName;
                 row.Freq.Value = (decimal)Math.Clamp(row.Channel.Frequency, (float)row.Freq.Minimum, (float)row.Freq.Maximum);
                 row.Passcode.Text = row.Channel.Passcode;
                 UpdateEncryptState(row);

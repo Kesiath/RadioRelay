@@ -52,4 +52,21 @@ public class RadioChannelPresetTests
         Assert.Equal(100.000f, radio.Frequency, precision: 3);
         Assert.Equal(string.Empty, radio.Passcode);
     }
+
+    [Fact]
+    public void Channel_names_follow_their_presets_and_appear_with_the_channel_number()
+    {
+        var radio = new RadioChannel();
+        radio.ConfigurePresets(251.000f);
+        radio.SetActiveChannelName("Guard");
+
+        radio.SelectChannel(2);
+        radio.SetActiveChannelName("Strike");
+
+        Assert.Equal("2 — Strike", radio.GetChannelDisplayName(2));
+        radio.SelectChannel(1);
+        Assert.Equal("Guard", radio.SelectedChannelName);
+        Assert.Equal("1 — Guard", radio.GetChannelDisplayName(1));
+        Assert.Equal("3", radio.GetChannelDisplayName(3));
+    }
 }

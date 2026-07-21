@@ -111,6 +111,7 @@ Each radio row represents a separate tunable channel. Frequency determines who c
 
 A radio can be configured with:
 
+- Per-channel names and presets
 - Frequency
 - Volume
 - Ear routing

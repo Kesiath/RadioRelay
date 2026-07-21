@@ -58,7 +58,7 @@ public class AppSettingsImportExportTests
                     SelectedChannel = 1,
                     Channels = new List<RadioPresetSettings>
                     {
-                        new() { Channel = 1, Frequency = 251.000f, Passcode = "red" },
+                        new() { Channel = 1, Name = "Guard", Frequency = 251.000f, Passcode = "red" },
                         new() { Channel = 2, Frequency = 260.500f, Passcode = "blue" }
                     },
                     HudColorArgb = 123,
@@ -90,6 +90,7 @@ public class AppSettingsImportExportTests
         Assert.Equal(2, channels[1].GetProperty("Channel").GetInt32());
         Assert.Equal(260.500f, channels[1].GetProperty("Frequency").GetSingle(), precision: 3);
         Assert.Equal("blue", channels[1].GetProperty("Passcode").GetString());
+        Assert.Equal("Guard", channels[0].GetProperty("Name").GetString());
 
         Assert.False(root.TryGetProperty("Callsign", out _));
         Assert.False(root.TryGetProperty("PttReleaseDelayMs", out _));

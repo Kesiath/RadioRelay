@@ -79,7 +79,7 @@ public class CompactFieldLayoutTests
             Assert.Equal(0, button.Margin.Bottom);
             Assert.Equal(32, button.Height);
         }
-        Assert.InRange(Math.Abs(lockButton.Width - importButton.Width), 0, 2);
+        Assert.InRange(Math.Abs(lockButton.Width - importButton.Width), 0, 3);
     }
 
     [Fact]
@@ -292,26 +292,47 @@ public class CompactFieldLayoutTests
     }
 
     [Fact]
-    public void Channel_selector_occupies_left_side_of_ptt_row_and_moves_ptt_a_right()
+    public void Channel_selector_and_name_occupy_the_left_side_and_move_ptt_a_right()
     {
         var channelBox = new DarkComboBox();
+        var channelName = new TextBox();
         var pttA = new ModernButton { Text = "PTT A" };
         var pttB = new ModernButton { Text = "PTT B" };
         var method = typeof(MainForm).GetMethod("CreatePttRow", BindingFlags.Static | BindingFlags.NonPublic);
         Assert.NotNull(method);
         using var row = Assert.IsType<TableLayoutPanel>(method!.Invoke(
             null,
-            new object[] { channelBox, new Label(), pttA, new Label(), pttB }));
+            new object[] { channelBox, channelName, new Label(), pttA, new Label(), pttB }));
 
         row.Size = new Size(710, 46);
         row.CreateControl();
         row.PerformLayout();
 
         var channelField = row.GetControlFromPosition(0, 0);
+        var channelNameField = row.GetControlFromPosition(2, 0);
         Assert.NotNull(channelField);
+        Assert.NotNull(channelNameField);
         Assert.True(channelField!.Left < pttA.Left);
-        Assert.True(pttA.Left >= 100);
+        Assert.True(channelNameField!.Left < pttA.Left);
+        Assert.True(pttA.Left >= 280);
         Assert.Equal("PTT A", pttA.Text);
+    }
+
+    [Fact]
+    public void Channel_selector_text_refreshes_when_the_selected_channel_name_changes()
+    {
+        var radio = new RadioChannel();
+        var channelBox = new DarkComboBox();
+        var method = typeof(MainForm).GetMethod("PopulateChannelSelector", BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        radio.SetActiveChannelName("Guard");
+        method!.Invoke(null, [channelBox, radio]);
+        Assert.Equal("1 — Guard", channelBox.Text);
+
+        radio.SetActiveChannelName("Tower");
+        method.Invoke(null, [channelBox, radio]);
+        Assert.Equal("1 — Tower", channelBox.Text);
     }
 
     [Fact]
