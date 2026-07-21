@@ -68,6 +68,25 @@ public class LocalRadioPassthroughProcessorTests
     }
 
     [Fact]
+    public void Passthrough_volume_scales_final_float_output_and_limits_boosted_peaks()
+    {
+        var unity = FloatPcm(0.2f, -0.4f);
+        var muted = FloatPcm(0.2f, -0.4f);
+        var boosted = FloatPcm(0.2f, 0.8f);
+
+        AudioEngine.ApplyPassthroughVolume(unity, 1f);
+        AudioEngine.ApplyPassthroughVolume(muted, 0f);
+        AudioEngine.ApplyPassthroughVolume(boosted, 3f);
+
+        Assert.Equal(0.2f, BitConverter.ToSingle(unity, 0));
+        Assert.Equal(-0.4f, BitConverter.ToSingle(unity, sizeof(float)));
+        Assert.Equal(0f, BitConverter.ToSingle(muted, 0));
+        Assert.Equal(0f, BitConverter.ToSingle(muted, sizeof(float)));
+        Assert.Equal(0.6f, BitConverter.ToSingle(boosted, 0), precision: 5);
+        Assert.InRange(BitConverter.ToSingle(boosted, sizeof(float)), 0.99f, 1f);
+    }
+
+    [Fact]
     public void No_active_radio_produces_no_passthrough_audio()
     {
         var processor = new LocalRadioPassthroughProcessor();
@@ -225,6 +244,31 @@ public class LocalRadioPassthroughProcessorTests
     }
 
     [Fact]
+    public void Passthrough_boundaries_ramp_to_and_from_silence()
+    {
+        const short left = 12_000;
+        const short right = -8_000;
+        var start = new short[OpusCodec.FrameSize * 2];
+        for (int frame = 0; frame < OpusCodec.FrameSize; frame++)
+        {
+            start[frame * 2] = left;
+            start[frame * 2 + 1] = right;
+        }
+
+        LocalRadioPassthroughProcessor.ApplyStartRamp(start);
+        var end = LocalRadioPassthroughProcessor.CreateEndRamp(left, right);
+
+        Assert.Equal(0, start[0]);
+        Assert.Equal(0, start[1]);
+        Assert.Equal(left, start[(AudioEngine.SampleRate *
+            LocalRadioPassthroughProcessor.BoundaryRampMilliseconds / 1000 - 1) * 2]);
+        Assert.Equal(0, end[^2]);
+        Assert.Equal(0, end[^1]);
+        Assert.InRange(Math.Abs(left - end[0]), 1, 300);
+        Assert.InRange(Math.Abs(right - end[1]), 1, 300);
+    }
+
+    [Fact]
     public void Shared_transmission_seed_keeps_passthrough_and_remote_noise_identical()
     {
         const uint seed = 0x5A17C0DEu;
@@ -348,5 +392,12 @@ public class LocalRadioPassthroughProcessorTests
         for (int i = 0; i < frame.Length; i++)
             frame[i] = (short)(Math.Sin(i * 0.12) * 8_000);
         return frame;
+    }
+
+    private static byte[] FloatPcm(params float[] samples)
+    {
+        var pcm = new byte[samples.Length * sizeof(float)];
+        Buffer.BlockCopy(samples, 0, pcm, 0, pcm.Length);
+        return pcm;
     }
 }

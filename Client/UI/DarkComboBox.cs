@@ -33,6 +33,7 @@ namespace RadioRelay.Client.UI
         }
 
         public event EventHandler? SelectedIndexChanged;
+        public event EventHandler? DropDownOpening;
 
         public List<object> Items { get; }
 
@@ -125,6 +126,8 @@ namespace RadioRelay.Client.UI
             {
                 return;
             }
+
+            DropDownOpening?.Invoke(this, EventArgs.Empty);
 
             CloseDropDown(_dropDown);
 

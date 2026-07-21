@@ -19,6 +19,8 @@ namespace RadioRelay.Client.AudioEngineNs
     /// </summary>
     internal sealed class LocalRadioPassthroughProcessor
     {
+        internal const int BoundaryRampMilliseconds = 3;
+
         private sealed class ChannelState
         {
             public required RadioBand Band { get; init; }
@@ -30,6 +32,29 @@ namespace RadioRelay.Client.AudioEngineNs
         }
 
         private readonly Dictionary<RadioChannel, ChannelState> _states = new();
+        private bool _boundaryActive;
+        private bool _fadeInNextFrame;
+        private bool _hasBoundaryOutput;
+        private short _lastLeft;
+        private short _lastRight;
+
+        public void BeginTransmission()
+        {
+            _boundaryActive = true;
+            _fadeInNextFrame = true;
+            _hasBoundaryOutput = false;
+            _lastLeft = 0;
+            _lastRight = 0;
+        }
+
+        public short[] EndTransmission()
+        {
+            var tail = _boundaryActive && _hasBoundaryOutput
+                ? CreateEndRamp(_lastLeft, _lastRight)
+                : Array.Empty<short>();
+            ResetBoundary();
+            return tail;
+        }
 
         public short[] Process(
             IReadOnlyList<(RadioChannel Channel, byte[] OpusPayload)> encodedFrames)
@@ -100,12 +125,30 @@ namespace RadioRelay.Client.AudioEngineNs
                 }
             }
 
-            return ToStereoPcm(mixedLeft, mixedRight);
+            var pcm = ToStereoPcm(mixedLeft, mixedRight);
+            if (_boundaryActive)
+            {
+                if (_fadeInNextFrame)
+                {
+                    ApplyStartRamp(pcm);
+                    _fadeInNextFrame = false;
+                }
+
+                if (pcm.Length >= 2)
+                {
+                    _lastLeft = pcm[^2];
+                    _lastRight = pcm[^1];
+                    _hasBoundaryOutput = true;
+                }
+            }
+
+            return pcm;
         }
 
         public void Reset()
         {
             _states.Clear();
+            ResetBoundary();
         }
 
         public void ResetChannel(RadioChannel channel) => _states.Remove(channel);
@@ -165,6 +208,48 @@ namespace RadioRelay.Client.AudioEngineNs
                     short.MaxValue);
             }
             return pcm;
+        }
+
+        internal static void ApplyStartRamp(short[] stereoPcm)
+        {
+            int rampFrames = Math.Min(
+                stereoPcm.Length / 2,
+                AudioEngine.SampleRate * BoundaryRampMilliseconds / 1000);
+            if (rampFrames <= 1) return;
+
+            for (int frame = 0; frame < rampFrames; frame++)
+            {
+                float gain = frame / (float)(rampFrames - 1);
+                int offset = frame * 2;
+                stereoPcm[offset] = (short)Math.Round(stereoPcm[offset] * gain);
+                stereoPcm[offset + 1] = (short)Math.Round(stereoPcm[offset + 1] * gain);
+            }
+        }
+
+        internal static short[] CreateEndRamp(short left, short right)
+        {
+            int rampFrames = Math.Max(
+                2,
+                AudioEngine.SampleRate * BoundaryRampMilliseconds / 1000);
+            var tail = new short[rampFrames * 2];
+            for (int frame = 0; frame < rampFrames; frame++)
+            {
+                float gain = 1f - (frame + 1f) / rampFrames;
+                int offset = frame * 2;
+                tail[offset] = (short)Math.Round(left * gain);
+                tail[offset + 1] = (short)Math.Round(right * gain);
+            }
+
+            return tail;
+        }
+
+        private void ResetBoundary()
+        {
+            _boundaryActive = false;
+            _fadeInNextFrame = false;
+            _hasBoundaryOutput = false;
+            _lastLeft = 0;
+            _lastRight = 0;
         }
     }
 }

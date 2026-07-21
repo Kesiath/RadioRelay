@@ -37,6 +37,10 @@ public class AppSettingsImportExportTests
             OutputDeviceIndex = 3,
             PassthroughDeviceId = "{render-endpoint}",
             PassthroughDeviceIndex = 6,
+            PassthroughVolume = 1.8f,
+            ApplicationAmbienceExecutablePath = @"C:\Games\Example\game.exe",
+            ApplicationAmbienceProcessName = "game",
+            ApplicationAmbienceGain = 0.62f,
             InputGain = 1.4f,
             InputClickVolume = 0.25f,
             TalkOverWarningVolume = 0.35f,
@@ -94,6 +98,10 @@ public class AppSettingsImportExportTests
         Assert.False(root.TryGetProperty("OutputDeviceIndex", out _));
         Assert.False(root.TryGetProperty("PassthroughDeviceId", out _));
         Assert.False(root.TryGetProperty("PassthroughDeviceIndex", out _));
+        Assert.False(root.TryGetProperty("PassthroughVolume", out _));
+        Assert.False(root.TryGetProperty("ApplicationAmbienceExecutablePath", out _));
+        Assert.False(root.TryGetProperty("ApplicationAmbienceProcessName", out _));
+        Assert.False(root.TryGetProperty("ApplicationAmbienceGain", out _));
         Assert.False(root.TryGetProperty("InputGain", out _));
         Assert.False(root.TryGetProperty("InputClickVolume", out _));
         Assert.False(root.TryGetProperty("TalkOverWarningVolume", out _));
@@ -172,6 +180,10 @@ public class AppSettingsImportExportTests
             OutputDeviceIndex = 5,
             PassthroughDeviceId = "{local-render-endpoint}",
             PassthroughDeviceIndex = 6,
+            PassthroughVolume = 1.7f,
+            ApplicationAmbienceExecutablePath = @"C:\Games\Local\game.exe",
+            ApplicationAmbienceProcessName = "game",
+            ApplicationAmbienceGain = 0.74f,
             InputGain = 1.6f,
             InputClickVolume = 0.2f,
             TalkOverWarningVolume = 0.3f,
@@ -203,6 +215,10 @@ public class AppSettingsImportExportTests
             OutputDeviceIndex = 98,
             PassthroughDeviceId = "{imported-render-endpoint}",
             PassthroughDeviceIndex = 97,
+            PassthroughVolume = 0.2f,
+            ApplicationAmbienceExecutablePath = @"C:\Games\Imported\other.exe",
+            ApplicationAmbienceProcessName = "other",
+            ApplicationAmbienceGain = 0.05f,
             InputGain = 0.1f,
             Radios = new List<RadioSettings>
             {
@@ -233,6 +249,10 @@ public class AppSettingsImportExportTests
         Assert.Equal(5, local.OutputDeviceIndex);
         Assert.Equal("{local-render-endpoint}", local.PassthroughDeviceId);
         Assert.Equal(6, local.PassthroughDeviceIndex);
+        Assert.Equal(1.7f, local.PassthroughVolume);
+        Assert.Equal(@"C:\Games\Local\game.exe", local.ApplicationAmbienceExecutablePath);
+        Assert.Equal("game", local.ApplicationAmbienceProcessName);
+        Assert.Equal(0.74f, local.ApplicationAmbienceGain);
         Assert.Equal(1.6f, local.InputGain);
         Assert.Equal(0.2f, local.InputClickVolume);
         Assert.Equal(0.3f, local.TalkOverWarningVolume);
